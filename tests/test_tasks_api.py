@@ -126,7 +126,9 @@ def test_task_not_found_responses(client: TestClient) -> None:
     assert delete_response.status_code == 404
 
 
-def test_task_state_is_isolated_between_app_instances() -> None:
+def test_task_state_is_isolated_between_app_instances(
+    configured_database_url: None,
+) -> None:
     with TestClient(create_app()) as first_client:
         first_client.post("/api/v1/tasks", json={"title": "Stored in first app"})
         assert len(first_client.get("/api/v1/tasks").json()) == 1
