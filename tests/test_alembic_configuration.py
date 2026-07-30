@@ -34,18 +34,33 @@ def test_alembic_config_does_not_store_database_credentials() -> None:
     assert "localhost" not in ini_contents
 
 
-def test_script_directory_loads_without_revision_heads() -> None:
+def test_script_directory_loads_initial_revision() -> None:
     config = build_alembic_config()
     script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+    bases = script.get_bases()
 
     assert Path(script.dir).resolve() == ALEMBIC_DIR
-    assert script.get_heads() == []
+    assert len(heads) == 1
+    assert heads == bases
+
+    revision = script.get_revision(heads[0])
+    assert revision is not None
+    assert revision.down_revision is None
 
 
-def test_required_alembic_files_exist_without_versions_directory() -> None:
+def test_required_alembic_files_and_initial_revision_exist() -> None:
+    versions_dir = ALEMBIC_DIR / "versions"
+    revision_files = sorted(versions_dir.glob("*.py"))
+
     assert ALEMBIC_ENV.is_file()
     assert ALEMBIC_TEMPLATE.is_file()
-    assert not (ALEMBIC_DIR / "versions").exists()
+    assert versions_dir.is_dir()
+    assert len(revision_files) == 1
+    assert revision_files[0].name.endswith("_create_initial_schema.py")
+    assert not (versions_dir / "__init__.py").exists()
+    assert not (versions_dir / ".gitkeep").exists()
+    assert not (versions_dir / "README").exists()
 
 
 def test_alembic_config_percent_escaping_round_trip() -> None:
@@ -62,6 +77,7 @@ def test_alembic_env_has_safe_imports_and_no_schema_creation() -> None:
     imported_names: set[str] = set()
     called_names: set[str] = set()
     called_attributes: set[str] = set()
+    target_metadata_values: list[ast.expr] = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -75,12 +91,25 @@ def test_alembic_env_has_safe_imports_and_no_schema_creation() -> None:
                 called_names.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
                 called_attributes.add(node.func.attr)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "target_metadata":
+                    target_metadata_values.append(node.value)
 
     assert "app.main" not in imported_modules
     assert "app.db.session" not in imported_modules
-    assert "app.models" not in imported_modules
-    assert "Base" not in imported_names
+    assert "app" in imported_modules
+    assert "models" in imported_names
     assert "create_engine" not in imported_names
     assert "Session" not in imported_names
     assert "create_all" not in called_names
     assert "create_all" not in called_attributes
+    assert len(target_metadata_values) == 1
+    target_metadata_value = target_metadata_values[0]
+    assert isinstance(target_metadata_value, ast.Attribute)
+    assert target_metadata_value.attr == "metadata"
+    base_attribute = target_metadata_value.value
+    assert isinstance(base_attribute, ast.Attribute)
+    assert base_attribute.attr == "Base"
+    assert isinstance(base_attribute.value, ast.Name)
+    assert base_attribute.value.id == "models"
