@@ -1,52 +1,68 @@
 # TaskHub
 
-TaskHub is a FastAPI task management Web API developed as the sample
-application for the Tech Stack Python - FastAPI module.
+TaskHub is a FastAPI task-management Web API built as the sample application for
+the Tech Stack Python - FastAPI module. This repository contains the backend API
+only; no frontend is included.
 
-## Scope
+## Current capabilities
 
-The project implements a backend API only. No frontend application is included
-in this module.
+- FastAPI application with lifespan handling and versioned routes under `/api/v1`
+- Dependency injection and Pydantic v2 request/response schemas
+- `GET /health`, Swagger UI, and ReDoc
+- Layered `Router -> Service -> Repository` structure
+- Temporary in-memory Task CRUD used to demonstrate the current API flow
+- SQLAlchemy 2.x async configuration with request-scoped `AsyncSession`
+- PostgreSQL 16 models for the TaskHub domain
+- Alembic initial migration for the current schema
+- Ruff, mypy, pytest, Dockerfile, and Docker Compose baseline
 
-Day 1 provides the project bootstrap:
+The database foundation is available, but the current Task API still uses the
+temporary in-memory repository. Persisted Task workflows, authentication, RBAC,
+Redis caching, and background assignment email are not implemented yet.
 
-- FastAPI application with lifespan handling
-- API version router under `/api/v1`
-- Dependency injection
-- `GET /health`
-- In-memory sample Task CRUD
-- Swagger UI and ReDoc
-- Ruff, mypy, and pytest configuration
-- Initial Dockerfile and Compose services for `api` and PostgreSQL 16 `db`
-
-The Day 1 Task CRUD is temporary in-memory behavior to demonstrate the layered
-architecture. It is not the complete Task feature. Sample tasks are stored only
-in the API process memory, so they are lost when the API process or container
-restarts. The PostgreSQL container does not store Day 1 sample tasks.
-
-## Current Stack
+## Tech stack
 
 - Python 3.11
-- FastAPI
-- Pydantic v2
+- FastAPI 0.111+
+- Pydantic v2 and pydantic-settings
+- SQLAlchemy 2.x async and asyncpg
+- PostgreSQL 16
+- Alembic
 - Uvicorn
-- PostgreSQL 16 in Docker Compose as a baseline service
-- Ruff, mypy, pytest, and HTTPX
+- Ruff, mypy, pytest, HTTPX
+- Docker and Docker Compose
 
 ## Architecture
 
+The target database-backed architecture is:
+
 ```text
-Router -> Service -> Repository
+Router -> Service -> Repository -> AsyncSession -> PostgreSQL
 ```
 
-Routers handle HTTP concerns. Services coordinate the sample task flow.
-Repositories manage the in-memory data store. Database integration is planned
-for a later pull request.
+Routers handle HTTP concerns. Services coordinate business rules and transaction
+boundaries. Repositories contain persistence queries and do not commit.
 
-## Local Setup
+The current Task runtime still uses `InMemoryTaskRepository`. Connecting Task
+workflows to the PostgreSQL repository is part of the next focused feature work.
 
-Create and activate the virtual environment with the selected Python
-interpreter:
+## Project structure
+
+```text
+app/api/          HTTP dependencies and versioned routers
+app/core/         settings and shared application configuration
+app/db/           async engine, session, Base, and mixins
+app/models/       SQLAlchemy models and enums
+app/repositories/ persistence implementations
+app/schemas/      Pydantic request and response schemas
+app/services/     business rules and transaction coordination
+alembic/          migration environment and revisions
+tests/            API, settings, session, metadata, and migration tests
+```
+
+## Local setup
+
+Create and activate the Python 3.11 environment:
 
 ```zsh
 /opt/homebrew/bin/python3.11 -m venv .venv
@@ -62,7 +78,40 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
 ```
 
-Run the API locally:
+Create local environment configuration from the safe example:
+
+```zsh
+cp .env.example .env
+```
+
+Do not commit `.env` or real credentials.
+
+## Database and migrations
+
+Start PostgreSQL:
+
+```zsh
+docker compose up -d db
+```
+
+Apply the current schema:
+
+```zsh
+alembic upgrade head
+```
+
+Useful migration commands:
+
+```zsh
+alembic current
+alembic check
+alembic history
+```
+
+Every schema change must include a reviewed Alembic migration with verified
+upgrade and downgrade behavior.
+
+## Run locally
 
 ```zsh
 uvicorn app.main:app --reload
@@ -74,7 +123,7 @@ Open:
 - `http://localhost:8000/docs`
 - `http://localhost:8000/redoc`
 
-## API Endpoints
+## Current API
 
 ```http
 GET    /health
@@ -85,7 +134,9 @@ PATCH  /api/v1/tasks/{task_id}
 DELETE /api/v1/tasks/{task_id}
 ```
 
-## Quality Checks
+Swagger UI and ReDoc are the source for detailed request and response schemas.
+
+## Quality checks
 
 ```zsh
 ruff format --check .
@@ -96,22 +147,33 @@ pytest
 
 ## Docker
 
-Validate the Compose file:
+Validate the current Compose file:
 
 ```zsh
 docker compose config
 ```
 
-Start the Day 1 stack:
+For now, use Docker Compose only to start PostgreSQL:
 
 ```zsh
-docker compose up --build
+docker compose up -d db
 ```
 
-The PostgreSQL container is included as the initial Docker baseline. The API
-does not connect to the database yet.
+Then run the API from the host environment:
 
-The default PostgreSQL credentials in `compose.yaml` and `.env.example` are
-for local development only and must not be used in production.
+```zsh
+uvicorn app.main:app --reload
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the project workflow.
+Docker API startup and automatic migration wiring are not complete yet. Redis
+and local email services will be added in later focused changes.
+
+## Current limitations
+
+- Task data is still stored in memory and is lost when the API restarts.
+- The Task API is not yet connected to the PostgreSQL repository.
+- Authentication, User/Workspace/Project APIs, RBAC, labels, comments, Redis, and
+  background email are not implemented yet.
+- Docker does not yet run migrations automatically.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
