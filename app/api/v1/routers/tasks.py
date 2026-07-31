@@ -1,10 +1,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 
 from app.api.dependencies import TaskServiceDep
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.models.enums import TaskPriority, TaskStatus
+from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 from app.services.task import (
     ActorNotFoundError,
     AssigneeNotFoundError,
@@ -51,10 +52,25 @@ async def create_task(
         ) from exc
 
 
-@router.get("/projects/{project_id}/tasks", response_model=list[TaskRead])
-async def list_tasks(project_id: UUID, service: TaskServiceDep) -> list[TaskRead]:
+@router.get("/projects/{project_id}/tasks", response_model=TaskListResponse)
+async def list_tasks(
+    project_id: UUID,
+    service: TaskServiceDep,
+    task_status: Annotated[TaskStatus | None, Query(alias="status")] = None,
+    priority: Annotated[TaskPriority | None, Query()] = None,
+    assignee_id: Annotated[UUID | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> TaskListResponse:
     try:
-        return await service.list_tasks(project_id)
+        return await service.list_tasks(
+            project_id,
+            status=task_status,
+            priority=priority,
+            assignee_id=assignee_id,
+            page=page,
+            limit=limit,
+        )
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -2,9 +2,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import TaskPriority, TaskStatus
 from app.models.task import Task
 from app.repositories.task import TaskRepository
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 
 
 class ProjectNotFoundError(Exception):
@@ -65,13 +66,42 @@ class TaskService:
         await self._commit()
         return self._to_read_model(created_task)
 
-    async def list_tasks(self, project_id: UUID) -> list[TaskRead]:
+    async def list_tasks(
+        self,
+        project_id: UUID,
+        *,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+        page: int,
+        limit: int,
+    ) -> TaskListResponse:
         project = await self._repository.get_project(project_id)
         if project is None:
             raise ProjectNotFoundError
 
-        tasks = await self._repository.list_by_project(project_id)
-        return [self._to_read_model(task) for task in tasks]
+        total = await self._repository.count_by_project(
+            project_id,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+        )
+        tasks = await self._repository.list_by_project(
+            project_id,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+            page=page,
+            limit=limit,
+        )
+        total_pages = 0 if total == 0 else (total + limit - 1) // limit
+        return TaskListResponse(
+            items=[self._to_read_model(task) for task in tasks],
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=total_pages,
+        )
 
     async def get_task(self, task_id: UUID) -> TaskRead:
         task = await self._repository.get(task_id)
