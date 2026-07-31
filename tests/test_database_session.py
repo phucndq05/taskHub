@@ -21,9 +21,8 @@ from app.db.session import (
     create_database_engine,
     create_database_session_factory,
 )
-from app.repositories.task_memory import InMemoryTaskRepository
 
-VALID_DATABASE_URL = "postgresql+asyncpg://taskhub:password@localhost:5432/taskhub"
+VALID_DATABASE_URL = "postgresql+asyncpg://taskhub:password@localhost:5432/taskhub_test"
 
 
 class StartupError(Exception):
@@ -88,7 +87,6 @@ def build_session_factory(
 def assert_database_state_absent(app: FastAPI) -> None:
     assert not hasattr(app.state, "database_engine")
     assert not hasattr(app.state, "database_session_factory")
-    assert not hasattr(app.state, "task_repository")
 
 
 def test_import_main_does_not_require_database_url(
@@ -160,7 +158,6 @@ async def test_lifespan_initializes_and_cleans_database_resources(
     async with LifespanManager(app):
         assert app.state.database_engine is engine
         assert isinstance(app.state.database_session_factory, async_sessionmaker)
-        assert isinstance(app.state.task_repository, InMemoryTaskRepository)
 
     assert_database_state_absent(app)
     dispose_mock.assert_awaited_once()
@@ -189,40 +186,6 @@ async def test_lifespan_disposes_engine_when_session_factory_creation_fails(
         main_module,
         "create_database_session_factory",
         fail_create_session_factory,
-    )
-    app = main_module.create_app()
-
-    with pytest.raises(StartupError):
-        async with LifespanManager(app):
-            pass
-
-    assert_database_state_absent(app)
-    dispose_mock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_lifespan_disposes_engine_when_task_repository_creation_fails(
-    isolated_settings: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
-    engine, dispose_mock = build_mock_engine()
-
-    def fake_create_database_engine(database_url: str) -> AsyncEngine:
-        return engine
-
-    def fail_create_task_repository() -> InMemoryTaskRepository:
-        raise StartupError("task repository creation failed")
-
-    monkeypatch.setattr(
-        main_module,
-        "create_database_engine",
-        fake_create_database_engine,
-    )
-    monkeypatch.setattr(
-        main_module,
-        "InMemoryTaskRepository",
-        fail_create_task_repository,
     )
     app = main_module.create_app()
 
