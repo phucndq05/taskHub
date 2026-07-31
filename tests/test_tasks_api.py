@@ -35,6 +35,7 @@ TASK_READ_FIELDS = {
     "created_at",
     "updated_at",
 }
+TASK_LIST_FIELDS = {"items", "page", "limit", "total", "total_pages"}
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,10 @@ async def insert_task(
     actor_id: UUID,
     title: str,
     created_at: datetime,
+    task_id: UUID | None = None,
+    assignee_id: UUID | None = None,
+    status: TaskStatus = TaskStatus.TODO,
+    priority: TaskPriority = TaskPriority.MEDIUM,
 ) -> UUID:
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
@@ -162,16 +167,18 @@ async def insert_task(
         async with session_factory() as session:
             task = Task(
                 project_id=project_id,
-                assignee_id=None,
+                assignee_id=assignee_id,
                 title=title,
                 description=None,
-                status=TaskStatus.TODO,
-                priority=TaskPriority.MEDIUM,
+                status=status,
+                priority=priority,
                 due_date=None,
                 created_by=actor_id,
                 created_at=created_at,
                 updated_at=created_at,
             )
+            if task_id is not None:
+                task.id = task_id
             session.add(task)
             await session.commit()
             return task.id
@@ -253,13 +260,16 @@ def test_create_defaults_status_priority_and_nullable_assignee(
     assert body["due_date"] is None
 
 
-def test_project_scoped_list_is_isolated_and_deterministically_ordered(
+def test_project_scoped_list_defaults_metadata_isolation_and_ordering(
     task_client: TestClient,
     task_context: TaskApiContext,
     test_database_url: str,
 ) -> None:
     first_created_at = datetime(2026, 8, 1, 8, 0, tzinfo=UTC)
     second_created_at = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
+    equal_created_at = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+    low_task_id = UUID("00000000-0000-4000-8000-000000000001")
+    high_task_id = UUID("00000000-0000-4000-8000-000000000002")
     asyncio.run(
         insert_task(
             test_database_url,
@@ -281,6 +291,26 @@ def test_project_scoped_list_is_isolated_and_deterministically_ordered(
     asyncio.run(
         insert_task(
             test_database_url,
+            project_id=task_context.project_id,
+            actor_id=task_context.owner_id,
+            title="Same timestamp lower id",
+            created_at=equal_created_at,
+            task_id=low_task_id,
+        )
+    )
+    asyncio.run(
+        insert_task(
+            test_database_url,
+            project_id=task_context.project_id,
+            actor_id=task_context.owner_id,
+            title="Same timestamp higher id",
+            created_at=equal_created_at,
+            task_id=high_task_id,
+        )
+    )
+    asyncio.run(
+        insert_task(
+            test_database_url,
             project_id=task_context.other_project_id,
             actor_id=task_context.owner_id,
             title="Other project task",
@@ -291,7 +321,179 @@ def test_project_scoped_list_is_isolated_and_deterministically_ordered(
     response = task_client.get(f"/api/v1/projects/{task_context.project_id}/tasks")
 
     assert response.status_code == 200
-    assert [task["title"] for task in response.json()] == ["Newer task", "Older task"]
+    body = response.json()
+    assert set(body) == TASK_LIST_FIELDS
+    assert body["page"] == 1
+    assert body["limit"] == 20
+    assert body["total"] == 4
+    assert body["total_pages"] == 1
+    assert [task["title"] for task in body["items"]] == [
+        "Same timestamp higher id",
+        "Same timestamp lower id",
+        "Newer task",
+        "Older task",
+    ]
+
+
+def test_list_filters_by_status_priority_assignee_and_combines_with_and(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+    test_database_url: str,
+) -> None:
+    created_at = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+    seed_tasks = [
+        ("Matching task", TaskStatus.DONE, TaskPriority.HIGH, task_context.assignee_id),
+        ("Wrong status", TaskStatus.TODO, TaskPriority.HIGH, task_context.assignee_id),
+        ("Wrong priority", TaskStatus.DONE, TaskPriority.LOW, task_context.assignee_id),
+        ("Wrong assignee", TaskStatus.DONE, TaskPriority.HIGH, task_context.owner_id),
+    ]
+    for title, task_status, priority, assignee_id in seed_tasks:
+        asyncio.run(
+            insert_task(
+                test_database_url,
+                project_id=task_context.project_id,
+                actor_id=task_context.owner_id,
+                title=title,
+                created_at=created_at,
+                status=task_status,
+                priority=priority,
+                assignee_id=assignee_id,
+            )
+        )
+
+    status_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?status=DONE"
+    )
+    priority_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?priority=HIGH"
+    )
+    assignee_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks"
+        f"?assignee_id={task_context.assignee_id}"
+    )
+    combined_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks"
+        f"?status=DONE&priority=HIGH&assignee_id={task_context.assignee_id}"
+    )
+
+    assert status_response.status_code == 200
+    assert {task["title"] for task in status_response.json()["items"]} == {
+        "Matching task",
+        "Wrong priority",
+        "Wrong assignee",
+    }
+    assert priority_response.status_code == 200
+    assert {task["title"] for task in priority_response.json()["items"]} == {
+        "Matching task",
+        "Wrong status",
+        "Wrong assignee",
+    }
+    assert assignee_response.status_code == 200
+    assert {task["title"] for task in assignee_response.json()["items"]} == {
+        "Matching task",
+        "Wrong status",
+        "Wrong priority",
+    }
+    assert combined_response.status_code == 200
+    combined_body = combined_response.json()
+    assert combined_body["total"] == 1
+    assert combined_body["total_pages"] == 1
+    assert [task["title"] for task in combined_body["items"]] == ["Matching task"]
+
+
+def test_list_pagination_counts_before_limit_and_handles_beyond_range(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+    test_database_url: str,
+) -> None:
+    for index in range(3):
+        asyncio.run(
+            insert_task(
+                test_database_url,
+                project_id=task_context.project_id,
+                actor_id=task_context.owner_id,
+                title=f"Page task {index + 1}",
+                created_at=datetime(2026, 8, 1, 10 - index, 0, tzinfo=UTC),
+            )
+        )
+
+    first_page_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?limit=1"
+    )
+    second_page_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?page=2&limit=1"
+    )
+    beyond_range_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?page=5&limit=1"
+    )
+
+    assert first_page_response.status_code == 200
+    first_page = first_page_response.json()
+    assert first_page["page"] == 1
+    assert first_page["limit"] == 1
+    assert first_page["total"] == 3
+    assert first_page["total_pages"] == 3
+    assert [task["title"] for task in first_page["items"]] == ["Page task 1"]
+    assert second_page_response.status_code == 200
+    second_page = second_page_response.json()
+    assert second_page["page"] == 2
+    assert second_page["limit"] == 1
+    assert second_page["total"] == 3
+    assert second_page["total_pages"] == 3
+    assert [task["title"] for task in second_page["items"]] == ["Page task 2"]
+    assert beyond_range_response.status_code == 200
+    beyond_range = beyond_range_response.json()
+    assert beyond_range["page"] == 5
+    assert beyond_range["limit"] == 1
+    assert beyond_range["total"] == 3
+    assert beyond_range["total_pages"] == 3
+    assert beyond_range["items"] == []
+
+
+def test_list_empty_filtered_result_and_limit_100_boundary(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+) -> None:
+    response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks"
+        f"?assignee_id={uuid4()}&limit=100"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "items": [],
+        "page": 1,
+        "limit": 100,
+        "total": 0,
+        "total_pages": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        "page=0",
+        "limit=0",
+        "limit=101",
+        "status=NOT_A_STATUS",
+        "status=",
+        "priority=NOT_A_PRIORITY",
+        "priority=",
+        "assignee_id=not-a-uuid",
+        "assignee_id=",
+    ],
+)
+def test_list_rejects_invalid_query_values(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+    query_string: str,
+) -> None:
+    response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks?{query_string}"
+    )
+
+    assert response.status_code == 422
 
 
 def test_task_persists_across_requests_and_fresh_app_instances(

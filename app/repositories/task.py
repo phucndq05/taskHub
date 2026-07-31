@@ -1,8 +1,10 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.models.enums import TaskPriority, TaskStatus
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
@@ -31,11 +33,64 @@ class TaskRepository(BaseRepository[Task]):
         membership = await self._session.scalar(statement)
         return membership is not None
 
-    async def list_by_project(self, project_id: UUID) -> list[Task]:
+    async def count_by_project(
+        self,
+        project_id: UUID,
+        *,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+    ) -> int:
+        conditions = self._project_task_conditions(
+            project_id,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+        )
+        statement = select(func.count()).select_from(Task).where(*conditions)
+        total = await self._session.scalar(statement)
+        return int(total or 0)
+
+    async def list_by_project(
+        self,
+        project_id: UUID,
+        *,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+        page: int,
+        limit: int,
+    ) -> list[Task]:
+        conditions = self._project_task_conditions(
+            project_id,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+        )
+        offset = (page - 1) * limit
         statement = (
             select(Task)
-            .where(Task.project_id == project_id)
+            .where(*conditions)
             .order_by(Task.created_at.desc(), Task.id.desc())
+            .offset(offset)
+            .limit(limit)
         )
         tasks = await self._session.scalars(statement)
         return list(tasks.all())
+
+    def _project_task_conditions(
+        self,
+        project_id: UUID,
+        *,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+    ) -> list[ColumnElement[bool]]:
+        conditions: list[ColumnElement[bool]] = [Task.project_id == project_id]
+        if status is not None:
+            conditions.append(Task.status == status)
+        if priority is not None:
+            conditions.append(Task.priority == priority)
+        if assignee_id is not None:
+            conditions.append(Task.assignee_id == assignee_id)
+        return conditions

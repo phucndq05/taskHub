@@ -79,3 +79,13 @@ class TaskRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TaskListResponse(BaseModel):
+    """Response body for a project task list."""
+
+    items: list[TaskRead]
+    page: int
+    limit: int
+    total: int
+    total_pages: int
