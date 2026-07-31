@@ -10,15 +10,14 @@ only; no frontend is included.
 - Dependency injection and Pydantic v2 request/response schemas
 - `GET /health`, Swagger UI, and ReDoc
 - Layered `Router -> Service -> Repository` structure
-- Temporary in-memory Task CRUD used to demonstrate the current API flow
+- Persisted project-scoped Task CRUD backed by PostgreSQL
 - SQLAlchemy 2.x async configuration with request-scoped `AsyncSession`
 - PostgreSQL 16 models for the TaskHub domain
 - Alembic initial migration for the current schema
 - Ruff, mypy, pytest, Dockerfile, and Docker Compose baseline
 
-The database foundation is available, but the current Task API still uses the
-temporary in-memory repository. Persisted Task workflows, authentication, RBAC,
-Redis caching, and background assignment email are not implemented yet.
+Authentication, RBAC, Redis caching, and background assignment email are not
+implemented yet.
 
 ## Tech stack
 
@@ -42,9 +41,6 @@ Router -> Service -> Repository -> AsyncSession -> PostgreSQL
 
 Routers handle HTTP concerns. Services coordinate business rules and transaction
 boundaries. Repositories contain persistence queries and do not commit.
-
-The current Task runtime still uses `InMemoryTaskRepository`. Connecting Task
-workflows to the PostgreSQL repository is part of the next focused feature work.
 
 ## Project structure
 
@@ -127,8 +123,8 @@ Open:
 
 ```http
 GET    /health
-POST   /api/v1/tasks
-GET    /api/v1/tasks
+POST   /api/v1/projects/{project_id}/tasks
+GET    /api/v1/projects/{project_id}/tasks
 GET    /api/v1/tasks/{task_id}
 PATCH  /api/v1/tasks/{task_id}
 DELETE /api/v1/tasks/{task_id}
@@ -170,8 +166,6 @@ and local email services will be added in later focused changes.
 
 ## Current limitations
 
-- Task data is still stored in memory and is lost when the API restarts.
-- The Task API is not yet connected to the PostgreSQL repository.
 - Authentication, User/Workspace/Project APIs, RBAC, labels, comments, Redis, and
   background email are not implemented yet.
 - Docker does not yet run migrations automatically.
