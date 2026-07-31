@@ -1,36 +1,20 @@
 ## Summary
 
-## Features or endpoints
+<!-- Briefly describe what this PR adds or changes. -->
 
-## Main files changed
+## Main changes
+
+- ...
+
+## Testing
+
+- `...`
 
 ## Database migration
 
 - [ ] No migration required
-- [ ] Migration added and reviewed
+- [ ] Migration added and verified
 
-## Security or RBAC impact
+## Notes
 
-## How to test
-
-```zsh
-# Add the commands used for this pull request.
-```
-
-## Results
-
-- Ruff:
-- mypy:
-- pytest:
-- Docker or manual API check:
-
-## Self-review
-
-- [ ] Scope is limited to this pull request
-- [ ] Code is simple, explicit, and easy to follow
-- [ ] No unnecessary abstractions or empty placeholder files were added
-- [ ] Names, comments, and docstrings follow the project conventions
-- [ ] Relevant tests pass
-- [ ] No secrets or local-only files are staged
-- [ ] Swagger/ReDoc matches changed API behavior
-- [ ] Known limitations are documented
+- N/A
