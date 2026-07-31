@@ -1,55 +1,115 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 
 from app.api.dependencies import TaskServiceDep
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.services.task import (
+    ActorNotFoundError,
+    AssigneeNotFoundError,
+    AssigneeNotWorkspaceMemberError,
+    ProjectNotFoundError,
+    TaskNotFoundError,
+)
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
-
-
-@router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-def create_task(task: TaskCreate, service: TaskServiceDep) -> TaskRead:
-    return service.create_task(task)
-
-
-@router.get("", response_model=list[TaskRead])
-def list_tasks(service: TaskServiceDep) -> list[TaskRead]:
-    return service.list_tasks()
+router = APIRouter(tags=["tasks"])
 
 
-@router.get("/{task_id}", response_model=TaskRead)
-def get_task(task_id: UUID, service: TaskServiceDep) -> TaskRead:
-    task = service.get_task(task_id)
-    if task is None:
+@router.post(
+    "/projects/{project_id}/tasks",
+    response_model=TaskRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task(
+    project_id: UUID,
+    task: TaskCreate,
+    actor_id: Annotated[UUID, Header(alias="X-Actor-ID")],
+    service: TaskServiceDep,
+) -> TaskRead:
+    try:
+        return await service.create_task(project_id, actor_id, task)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        ) from exc
+    except ActorNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Actor not found.",
+        ) from exc
+    except AssigneeNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignee not found.",
+        ) from exc
+    except AssigneeNotWorkspaceMemberError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assignee is not a member of the project workspace.",
+        ) from exc
+
+
+@router.get("/projects/{project_id}/tasks", response_model=list[TaskRead])
+async def list_tasks(project_id: UUID, service: TaskServiceDep) -> list[TaskRead]:
+    try:
+        return await service.list_tasks(project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        ) from exc
+
+
+@router.get("/tasks/{task_id}", response_model=TaskRead)
+async def get_task(task_id: UUID, service: TaskServiceDep) -> TaskRead:
+    try:
+        return await service.get_task(task_id)
+    except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
-        )
-    return task
+        ) from exc
 
 
-@router.patch("/{task_id}", response_model=TaskRead)
-def update_task(
+@router.patch("/tasks/{task_id}", response_model=TaskRead)
+async def update_task(
     task_id: UUID,
     task_update: TaskUpdate,
     service: TaskServiceDep,
 ) -> TaskRead:
-    task = service.update_task(task_id, task_update)
-    if task is None:
+    try:
+        return await service.update_task(task_id, task_update)
+    except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
-        )
-    return task
+        ) from exc
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        ) from exc
+    except AssigneeNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignee not found.",
+        ) from exc
+    except AssigneeNotWorkspaceMemberError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assignee is not a member of the project workspace.",
+        ) from exc
 
 
-@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_task(task_id: UUID, service: TaskServiceDep) -> Response:
-    deleted = service.delete_task(task_id)
-    if not deleted:
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(task_id: UUID, service: TaskServiceDep) -> Response:
+    try:
+        await service.delete_task(task_id)
+    except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
-        )
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
