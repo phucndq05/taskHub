@@ -20,6 +20,7 @@ ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
 LIGHTWEIGHT_TEST_DATABASE_URL = (
     "postgresql+asyncpg://taskhub:password@localhost:5432/taskhub_test"
 )
+TEST_JWT_SECRET_KEY = "test-secret-key-with-at-least-32-characters"
 DOMAIN_TABLES = (
     "comments",
     "task_labels",
@@ -52,11 +53,26 @@ def _validated_test_database_url() -> str:
     return database_url
 
 
-def _restore_database_url(previous_database_url: str | None) -> None:
+def _restore_environment(
+    previous_database_url: str | None,
+    previous_jwt_secret_key: str | None,
+    previous_jwt_algorithm: str | None,
+) -> None:
     if previous_database_url is None:
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = previous_database_url
+
+    if previous_jwt_secret_key is None:
+        os.environ.pop("JWT_SECRET_KEY", None)
+    else:
+        os.environ["JWT_SECRET_KEY"] = previous_jwt_secret_key
+
+    if previous_jwt_algorithm is None:
+        os.environ.pop("JWT_ALGORITHM", None)
+    else:
+        os.environ["JWT_ALGORITHM"] = previous_jwt_algorithm
+
     get_settings.cache_clear()
 
 
@@ -80,20 +96,32 @@ def test_database_url() -> str:
 @pytest.fixture(scope="session")
 def migrated_test_database(test_database_url: str) -> Generator[str, None, None]:
     previous_database_url = os.environ.get("DATABASE_URL")
+    previous_jwt_secret_key = os.environ.get("JWT_SECRET_KEY")
+    previous_jwt_algorithm = os.environ.get("JWT_ALGORITHM")
     os.environ["DATABASE_URL"] = test_database_url
+    os.environ["JWT_SECRET_KEY"] = TEST_JWT_SECRET_KEY
+    os.environ["JWT_ALGORITHM"] = "HS256"
     get_settings.cache_clear()
 
     try:
         alembic_config = Config(str(ALEMBIC_INI))
         command.upgrade(alembic_config, "head")
     except Exception as exc:
-        _restore_database_url(previous_database_url)
+        _restore_environment(
+            previous_database_url,
+            previous_jwt_secret_key,
+            previous_jwt_algorithm,
+        )
         pytest.fail(
             "TEST_DATABASE_URL could not be reached or migrated "
             f"({type(exc).__name__})."
         )
     else:
-        _restore_database_url(previous_database_url)
+        _restore_environment(
+            previous_database_url,
+            previous_jwt_secret_key,
+            previous_jwt_algorithm,
+        )
 
     yield test_database_url
 
@@ -118,6 +146,8 @@ def configured_database_url(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DATABASE_URL", migrated_test_database)
+    monkeypatch.setenv("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
+    monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     get_settings.cache_clear()
     try:
         yield
@@ -133,6 +163,8 @@ def client(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DATABASE_URL", LIGHTWEIGHT_TEST_DATABASE_URL)
+    monkeypatch.setenv("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
+    monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     get_settings.cache_clear()
     try:
         with TestClient(create_app()) as test_client:

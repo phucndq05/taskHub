@@ -1,15 +1,19 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+SUPPORTED_JWT_ALGORITHMS = {"HS256"}
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     database_url: str
+    jwt_secret_key: SecretStr
+    jwt_algorithm: str = "HS256"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -42,6 +46,19 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL must include a database name.")
 
         return database_url
+
+    @field_validator("jwt_algorithm", mode="before")
+    @classmethod
+    def validate_jwt_algorithm(cls, value: object) -> str:
+        """Validate the configured JWT signing algorithm."""
+        if not isinstance(value, str):
+            raise ValueError("JWT_ALGORITHM must be a string.")
+
+        algorithm = value.strip()
+        if algorithm not in SUPPORTED_JWT_ALGORITHMS:
+            raise ValueError("JWT_ALGORITHM must be HS256.")
+
+        return algorithm
 
 
 @lru_cache(maxsize=1)
