@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.refresh_token import RefreshToken
@@ -19,3 +20,14 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
             select(RefreshToken).where(RefreshToken.id == token_id).with_for_update()
         )
         return cast(RefreshToken | None, await self._session.scalar(statement))
+
+    async def revoke_active_for_user(self, user_id: UUID, revoked_at: datetime) -> None:
+        statement = (
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+        )
+        await self._session.execute(statement)

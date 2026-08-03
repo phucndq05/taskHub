@@ -17,6 +17,7 @@ from app.services.auth import (
     InvalidAccessTokenError,
 )
 from app.services.task import TaskService
+from app.services.user import UserService
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login",
@@ -102,6 +103,18 @@ def get_auth_service(
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+
+def get_user_service(
+    user_repository: UserRepositoryDep,
+    refresh_token_repository: RefreshTokenRepositoryDep,
+    session: DatabaseSessionDep,
+) -> UserService:
+    """Create a user service for the current request."""
+    return UserService(user_repository, refresh_token_repository, session)
+
+
+UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 
 AccessTokenDep = Annotated[str | None, Depends(oauth2_scheme)]
 
