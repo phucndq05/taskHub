@@ -1,13 +1,15 @@
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.security import create_access_token
 from app.main import create_app
 from app.models.enums import (
     ProjectStatus,
@@ -36,6 +38,7 @@ TASK_READ_FIELDS = {
     "updated_at",
 }
 TASK_LIST_FIELDS = {"items", "page", "limit", "total", "total_pages"}
+TEST_JWT_SECRET_KEY = "test-secret-key-with-at-least-32-characters"
 
 
 @dataclass(frozen=True)
@@ -47,8 +50,14 @@ class TaskApiContext:
     other_project_id: UUID
 
 
-def actor_headers(actor_id: UUID) -> dict[str, str]:
-    return {"X-Actor-ID": str(actor_id)}
+def bearer_headers(user_id: UUID) -> dict[str, str]:
+    access_token, _ = create_access_token(
+        user_id=user_id,
+        secret_key=TEST_JWT_SECRET_KEY,
+        algorithm="HS256",
+        now=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    return {"Authorization": f"Bearer {access_token}"}
 
 
 def parse_datetime(value: str) -> datetime:
@@ -201,7 +210,7 @@ def create_task(
 ) -> dict[str, object]:
     response = task_client.post(
         f"/api/v1/projects/{context.project_id}/tasks",
-        headers=actor_headers(context.owner_id),
+        headers=bearer_headers(context.owner_id),
         json=payload or {"title": "Persisted task"},
     )
     assert response.status_code == 201
@@ -217,7 +226,10 @@ def test_project_scoped_create_returns_all_scalar_task_fields(
 
     response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers={
+            **bearer_headers(task_context.owner_id),
+            "X-Actor-ID": str(task_context.non_member_id),
+        },
         json={
             "title": "  Build persisted tasks  ",
             "description": "Store tasks in PostgreSQL",
@@ -520,7 +532,7 @@ def test_create_and_list_return_404_for_missing_project(
 
     create_response = task_client.post(
         f"/api/v1/projects/{missing_project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "Missing project"},
     )
     list_response = task_client.get(f"/api/v1/projects/{missing_project_id}/tasks")
@@ -529,7 +541,7 @@ def test_create_and_list_return_404_for_missing_project(
     assert list_response.status_code == 404
 
 
-def test_create_requires_valid_actor_header(
+def test_create_requires_valid_access_token(
     task_client: TestClient,
     task_context: TaskApiContext,
 ) -> None:
@@ -539,18 +551,39 @@ def test_create_requires_valid_actor_header(
     )
     malformed_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers={"X-Actor-ID": "not-a-uuid"},
+        headers={"Authorization": "Bearer not-a-jwt"},
         json={"title": "Bad actor"},
+    )
+    unknown_access_token, _ = create_access_token(
+        user_id=uuid4(),
+        secret_key=TEST_JWT_SECRET_KEY,
+        algorithm="HS256",
+        now=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    unknown_access_claims = jwt.decode(
+        unknown_access_token,
+        TEST_JWT_SECRET_KEY,
+        algorithms=["HS256"],
+    )
+    assert unknown_access_claims["type"] == "access"
+    assert datetime.fromtimestamp(int(unknown_access_claims["exp"]), UTC) > (
+        datetime.now(UTC)
     )
     unknown_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(uuid4()),
+        headers={"Authorization": f"Bearer {unknown_access_token}"},
         json={"title": "Unknown actor"},
     )
 
-    assert absent_response.status_code == 422
-    assert malformed_response.status_code == 422
-    assert unknown_response.status_code == 404
+    assert absent_response.status_code == 401
+    assert absent_response.json() == {"detail": "Could not validate credentials"}
+    assert absent_response.headers["WWW-Authenticate"] == "Bearer"
+    assert malformed_response.status_code == 401
+    assert malformed_response.json() == {"detail": "Could not validate credentials"}
+    assert malformed_response.headers["WWW-Authenticate"] == "Bearer"
+    assert unknown_response.status_code == 401
+    assert unknown_response.json() == {"detail": "Could not validate credentials"}
+    assert unknown_response.headers["WWW-Authenticate"] == "Bearer"
 
 
 def test_create_rejects_unknown_assignee_without_persisting_task(
@@ -560,7 +593,7 @@ def test_create_rejects_unknown_assignee_without_persisting_task(
 ) -> None:
     response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "Unknown assignee", "assignee_id": str(uuid4())},
     )
 
@@ -575,7 +608,7 @@ def test_create_rejects_non_member_assignee_without_persisting_task(
 ) -> None:
     response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={
             "title": "Non-member assignee",
             "assignee_id": str(task_context.non_member_id),
@@ -640,7 +673,7 @@ def test_due_date_requires_timezone_for_create_and_update(
 ) -> None:
     create_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "Naive create due date", "due_date": "2026-08-01T09:30:00"},
     )
     created = create_task(task_client, task_context)
@@ -699,12 +732,12 @@ def test_title_validation_and_unknown_fields(
 ) -> None:
     blank_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "   "},
     )
     stripped_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "  Trimmed title  "},
     )
     null_title_response = task_client.patch(
@@ -713,7 +746,7 @@ def test_title_validation_and_unknown_fields(
     )
     create_unknown_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "Valid title", "project_id": str(task_context.project_id)},
     )
     patch_unknown_response = task_client.patch(
@@ -735,7 +768,7 @@ def test_old_unscoped_collection_routes_are_not_retained(
 ) -> None:
     post_response = task_client.post(
         "/api/v1/tasks",
-        headers=actor_headers(task_context.owner_id),
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "Old route"},
     )
     get_response = task_client.get("/api/v1/tasks")

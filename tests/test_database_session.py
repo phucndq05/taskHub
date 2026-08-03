@@ -23,6 +23,7 @@ from app.db.session import (
 )
 
 VALID_DATABASE_URL = "postgresql+asyncpg://taskhub:password@localhost:5432/taskhub_test"
+VALID_JWT_SECRET_KEY = "test-secret-key-with-at-least-32-characters"
 
 
 class StartupError(Exception):
@@ -142,6 +143,7 @@ async def test_lifespan_initializes_and_cleans_database_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
+    monkeypatch.setenv("JWT_SECRET_KEY", VALID_JWT_SECRET_KEY)
     engine, dispose_mock = build_mock_engine()
 
     def fake_create_database_engine(database_url: str) -> AsyncEngine:
@@ -169,6 +171,7 @@ async def test_lifespan_disposes_engine_when_session_factory_creation_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
+    monkeypatch.setenv("JWT_SECRET_KEY", VALID_JWT_SECRET_KEY)
     engine, dispose_mock = build_mock_engine()
 
     def fake_create_database_engine(database_url: str) -> AsyncEngine:
