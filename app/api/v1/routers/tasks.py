@@ -1,9 +1,9 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.api.dependencies import TaskServiceDep
+from app.api.dependencies import CurrentActiveUserDep, TaskServiceDep
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 from app.services.task import (
@@ -25,11 +25,11 @@ router = APIRouter(tags=["tasks"])
 async def create_task(
     project_id: UUID,
     task: TaskCreate,
-    actor_id: Annotated[UUID, Header(alias="X-Actor-ID")],
+    current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
 ) -> TaskRead:
     try:
-        return await service.create_task(project_id, actor_id, task)
+        return await service.create_task(project_id, current_user.id, task)
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
