@@ -7,9 +7,13 @@ from pydantic import BaseModel, ConfigDict, EmailStr, StringConstraints, field_v
 from app.core.security import normalize_email
 from app.models.enums import UserRole
 
+FULL_NAME_MAX_LENGTH = 255
+
 FullName = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1),
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=FULL_NAME_MAX_LENGTH
+    ),
 ]
 
 Password = Annotated[
@@ -51,3 +55,27 @@ class UserRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserProfileUpdate(BaseModel):
+    """Request body for updating the current user's profile."""
+
+    full_name: FullName | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def reject_null_full_name(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("full_name cannot be null.")
+        return value
+
+
+class PasswordChangeRequest(BaseModel):
+    """Request body for changing the current user's password."""
+
+    current_password: Password
+    new_password: Password
+
+    model_config = ConfigDict(extra="forbid")
