@@ -11,6 +11,7 @@ from app.models.user import User
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.task import TaskRepository
 from app.repositories.user import UserRepository
+from app.repositories.workspace import WorkspaceRepository
 from app.services.auth import (
     AuthService,
     InactiveUserError,
@@ -18,6 +19,7 @@ from app.services.auth import (
 )
 from app.services.task import TaskService
 from app.services.user import UserService
+from app.services.workspace import WorkspaceService
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login",
@@ -71,6 +73,17 @@ def get_user_repository(session: DatabaseSessionDep) -> UserRepository:
 
 
 UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+def get_workspace_repository(session: DatabaseSessionDep) -> WorkspaceRepository:
+    """Create a workspace repository from the current request session."""
+    return WorkspaceRepository(session)
+
+
+WorkspaceRepositoryDep = Annotated[
+    WorkspaceRepository,
+    Depends(get_workspace_repository),
+]
 
 
 def get_refresh_token_repository(
@@ -166,3 +179,15 @@ def get_task_service(
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
+
+def get_workspace_service(
+    workspace_repository: WorkspaceRepositoryDep,
+    user_repository: UserRepositoryDep,
+    session: DatabaseSessionDep,
+) -> WorkspaceService:
+    """Create a workspace service for the current request."""
+    return WorkspaceService(workspace_repository, user_repository, session)
+
+
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
