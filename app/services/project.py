@@ -149,6 +149,32 @@ class ProjectService:
 
         return ProjectRead.model_validate(updated_project)
 
+    async def archive_project(
+        self,
+        current_user: User,
+        project_id: UUID,
+    ) -> ProjectRead:
+        project = await self._get_project_for_action(
+            current_user,
+            project_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+            ),
+        )
+        if project.status is ProjectStatus.ARCHIVED:
+            return ProjectRead.model_validate(project)
+
+        project.status = ProjectStatus.ARCHIVED
+        try:
+            archived_project = await self._project_repository.update(project)
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
+
+        return ProjectRead.model_validate(archived_project)
+
     async def delete_project(
         self,
         current_user: User,

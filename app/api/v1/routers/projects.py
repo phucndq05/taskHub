@@ -110,6 +110,26 @@ async def update_project(
         ) from exc
 
 
+@router.patch("/projects/{project_id}/archive", response_model=ProjectRead)
+async def archive_project(
+    project_id: UUID,
+    current_user: CurrentActiveUserDep,
+    service: ProjectServiceDep,
+) -> ProjectRead:
+    try:
+        return await service.archive_project(current_user, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        ) from exc
+    except ProjectPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough project permissions",
+        ) from exc
+
+
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
