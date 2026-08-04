@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.db.session import AsyncSessionFactory
 from app.models.user import User
+from app.repositories.project import ProjectRepository
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.task import TaskRepository
 from app.repositories.user import UserRepository
@@ -17,6 +18,7 @@ from app.services.auth import (
     InactiveUserError,
     InvalidAccessTokenError,
 )
+from app.services.project import ProjectService
 from app.services.task import TaskService
 from app.services.user import UserService
 from app.services.workspace import WorkspaceService
@@ -83,6 +85,17 @@ def get_workspace_repository(session: DatabaseSessionDep) -> WorkspaceRepository
 WorkspaceRepositoryDep = Annotated[
     WorkspaceRepository,
     Depends(get_workspace_repository),
+]
+
+
+def get_project_repository(session: DatabaseSessionDep) -> ProjectRepository:
+    """Create a project repository from the current request session."""
+    return ProjectRepository(session)
+
+
+ProjectRepositoryDep = Annotated[
+    ProjectRepository,
+    Depends(get_project_repository),
 ]
 
 
@@ -191,3 +204,15 @@ def get_workspace_service(
 
 
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
+
+
+def get_project_service(
+    project_repository: ProjectRepositoryDep,
+    workspace_repository: WorkspaceRepositoryDep,
+    session: DatabaseSessionDep,
+) -> ProjectService:
+    """Create a project service for the current request."""
+    return ProjectService(project_repository, workspace_repository, session)
+
+
+ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
