@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.db.session import AsyncSessionFactory
 from app.models.user import User
+from app.repositories.label import LabelRepository
 from app.repositories.project import ProjectRepository
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.task import TaskRepository
@@ -18,6 +19,7 @@ from app.services.auth import (
     InactiveUserError,
     InvalidAccessTokenError,
 )
+from app.services.label import LabelService
 from app.services.project import ProjectService
 from app.services.task import TaskService
 from app.services.user import UserService
@@ -96,6 +98,17 @@ def get_project_repository(session: DatabaseSessionDep) -> ProjectRepository:
 ProjectRepositoryDep = Annotated[
     ProjectRepository,
     Depends(get_project_repository),
+]
+
+
+def get_label_repository(session: DatabaseSessionDep) -> LabelRepository:
+    """Create a label repository from the current request session."""
+    return LabelRepository(session)
+
+
+LabelRepositoryDep = Annotated[
+    LabelRepository,
+    Depends(get_label_repository),
 ]
 
 
@@ -216,3 +229,15 @@ def get_project_service(
 
 
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+
+
+def get_label_service(
+    label_repository: LabelRepositoryDep,
+    workspace_repository: WorkspaceRepositoryDep,
+    session: DatabaseSessionDep,
+) -> LabelService:
+    """Create a label service for the current request."""
+    return LabelService(label_repository, workspace_repository, session)
+
+
+LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
