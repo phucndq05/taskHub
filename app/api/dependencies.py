@@ -211,10 +211,11 @@ CurrentActiveUserDep = Annotated[User, Depends(get_current_active_user)]
 
 def get_task_service(
     repository: TaskRepositoryDep,
+    workspace_repository: WorkspaceRepositoryDep,
     session: DatabaseSessionDep,
 ) -> TaskService:
     """Create a task service for the current request."""
-    return TaskService(repository, session)
+    return TaskService(repository, workspace_repository, session)
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]

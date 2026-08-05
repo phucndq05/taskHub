@@ -23,6 +23,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
+from tests.test_auth_api import set_user_active
 
 TASK_READ_FIELDS = {
     "id",
@@ -45,7 +46,9 @@ TEST_JWT_SECRET_KEY = "test-secret-key-with-at-least-32-characters"
 class TaskApiContext:
     owner_id: UUID
     assignee_id: UUID
+    viewer_id: UUID
     non_member_id: UUID
+    admin_id: UUID
     project_id: UUID
     other_project_id: UUID
 
@@ -83,13 +86,25 @@ async def seed_task_context(database_url: str) -> TaskApiContext:
                 hashed_password="hashed-password",
                 role=UserRole.MEMBER,
             )
+            viewer = User(
+                email=f"viewer-{seed_id}@example.com",
+                full_name="Workspace Viewer",
+                hashed_password="hashed-password",
+                role=UserRole.MEMBER,
+            )
             non_member = User(
                 email=f"non-member-{seed_id}@example.com",
                 full_name="Other User",
                 hashed_password="hashed-password",
                 role=UserRole.MEMBER,
             )
-            session.add_all([owner, assignee, non_member])
+            admin = User(
+                email=f"admin-{seed_id}@example.com",
+                full_name="System Admin",
+                hashed_password="hashed-password",
+                role=UserRole.ADMIN,
+            )
+            session.add_all([owner, assignee, viewer, non_member, admin])
             await session.flush()
 
             workspace = Workspace(name="Product Workspace", owner_id=owner.id)
@@ -108,6 +123,11 @@ async def seed_task_context(database_url: str) -> TaskApiContext:
                         workspace_id=workspace.id,
                         user_id=assignee.id,
                         role=WorkspaceMemberRole.EDITOR,
+                    ),
+                    WorkspaceMember(
+                        workspace_id=workspace.id,
+                        user_id=viewer.id,
+                        role=WorkspaceMemberRole.VIEWER,
                     ),
                     WorkspaceMember(
                         workspace_id=other_workspace.id,
@@ -137,7 +157,9 @@ async def seed_task_context(database_url: str) -> TaskApiContext:
             return TaskApiContext(
                 owner_id=owner.id,
                 assignee_id=assignee.id,
+                viewer_id=viewer.id,
                 non_member_id=non_member.id,
+                admin_id=admin.id,
                 project_id=project.id,
                 other_project_id=other_project.id,
             )
@@ -330,7 +352,10 @@ def test_project_scoped_list_defaults_metadata_isolation_and_ordering(
         )
     )
 
-    response = task_client.get(f"/api/v1/projects/{task_context.project_id}/tasks")
+    response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -374,18 +399,22 @@ def test_list_filters_by_status_priority_assignee_and_combines_with_and(
         )
 
     status_response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?status=DONE"
+        f"/api/v1/projects/{task_context.project_id}/tasks?status=DONE",
+        headers=bearer_headers(task_context.owner_id),
     )
     priority_response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?priority=HIGH"
+        f"/api/v1/projects/{task_context.project_id}/tasks?priority=HIGH",
+        headers=bearer_headers(task_context.owner_id),
     )
     assignee_response = task_client.get(
         f"/api/v1/projects/{task_context.project_id}/tasks"
-        f"?assignee_id={task_context.assignee_id}"
+        f"?assignee_id={task_context.assignee_id}",
+        headers=bearer_headers(task_context.owner_id),
     )
     combined_response = task_client.get(
         f"/api/v1/projects/{task_context.project_id}/tasks"
-        f"?status=DONE&priority=HIGH&assignee_id={task_context.assignee_id}"
+        f"?status=DONE&priority=HIGH&assignee_id={task_context.assignee_id}",
+        headers=bearer_headers(task_context.owner_id),
     )
 
     assert status_response.status_code == 200
@@ -430,13 +459,16 @@ def test_list_pagination_counts_before_limit_and_handles_beyond_range(
         )
 
     first_page_response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?limit=1"
+        f"/api/v1/projects/{task_context.project_id}/tasks?limit=1",
+        headers=bearer_headers(task_context.owner_id),
     )
     second_page_response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?page=2&limit=1"
+        f"/api/v1/projects/{task_context.project_id}/tasks?page=2&limit=1",
+        headers=bearer_headers(task_context.owner_id),
     )
     beyond_range_response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?page=5&limit=1"
+        f"/api/v1/projects/{task_context.project_id}/tasks?page=5&limit=1",
+        headers=bearer_headers(task_context.owner_id),
     )
 
     assert first_page_response.status_code == 200
@@ -468,7 +500,8 @@ def test_list_empty_filtered_result_and_limit_100_boundary(
 ) -> None:
     response = task_client.get(
         f"/api/v1/projects/{task_context.project_id}/tasks"
-        f"?assignee_id={uuid4()}&limit=100"
+        f"?assignee_id={uuid4()}&limit=100",
+        headers=bearer_headers(task_context.owner_id),
     )
 
     assert response.status_code == 200
@@ -502,7 +535,8 @@ def test_list_rejects_invalid_query_values(
     query_string: str,
 ) -> None:
     response = task_client.get(
-        f"/api/v1/projects/{task_context.project_id}/tasks?{query_string}"
+        f"/api/v1/projects/{task_context.project_id}/tasks?{query_string}",
+        headers=bearer_headers(task_context.owner_id),
     )
 
     assert response.status_code == 422
@@ -513,10 +547,16 @@ def test_task_persists_across_requests_and_fresh_app_instances(
     task_context: TaskApiContext,
 ) -> None:
     created = create_task(task_client, task_context)
-    same_app_response = task_client.get(f"/api/v1/tasks/{created['id']}")
+    same_app_response = task_client.get(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     with TestClient(create_app()) as second_client:
-        fresh_app_response = second_client.get(f"/api/v1/tasks/{created['id']}")
+        fresh_app_response = second_client.get(
+            f"/api/v1/tasks/{created['id']}",
+            headers=bearer_headers(task_context.owner_id),
+        )
 
     assert same_app_response.status_code == 200
     assert same_app_response.json()["id"] == created["id"]
@@ -535,7 +575,10 @@ def test_create_and_list_return_404_for_missing_project(
         headers=bearer_headers(task_context.owner_id),
         json={"title": "Missing project"},
     )
-    list_response = task_client.get(f"/api/v1/projects/{missing_project_id}/tasks")
+    list_response = task_client.get(
+        f"/api/v1/projects/{missing_project_id}/tasks",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert create_response.status_code == 404
     assert list_response.status_code == 404
@@ -544,15 +587,25 @@ def test_create_and_list_return_404_for_missing_project(
 def test_create_requires_valid_access_token(
     task_client: TestClient,
     task_context: TaskApiContext,
+    test_database_url: str,
 ) -> None:
+    created = create_task(task_client, task_context)
     absent_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
         json={"title": "No actor"},
     )
+    absent_list_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks"
+    )
+    absent_get_response = task_client.get(f"/api/v1/tasks/{created['id']}")
     malformed_response = task_client.post(
         f"/api/v1/projects/{task_context.project_id}/tasks",
         headers={"Authorization": "Bearer not-a-jwt"},
         json={"title": "Bad actor"},
+    )
+    malformed_delete_response = task_client.delete(
+        f"/api/v1/tasks/{created['id']}",
+        headers={"Authorization": "Bearer not-a-jwt"},
     )
     unknown_access_token, _ = create_access_token(
         user_id=uuid4(),
@@ -574,16 +627,34 @@ def test_create_requires_valid_access_token(
         headers={"Authorization": f"Bearer {unknown_access_token}"},
         json={"title": "Unknown actor"},
     )
+    asyncio.run(set_user_active(test_database_url, task_context.owner_id, False))
+    inactive_response = task_client.get(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert absent_response.status_code == 401
     assert absent_response.json() == {"detail": "Could not validate credentials"}
     assert absent_response.headers["WWW-Authenticate"] == "Bearer"
+    assert absent_list_response.status_code == 401
+    assert absent_list_response.json() == {"detail": "Could not validate credentials"}
+    assert absent_list_response.headers["WWW-Authenticate"] == "Bearer"
+    assert absent_get_response.status_code == 401
+    assert absent_get_response.json() == {"detail": "Could not validate credentials"}
+    assert absent_get_response.headers["WWW-Authenticate"] == "Bearer"
     assert malformed_response.status_code == 401
     assert malformed_response.json() == {"detail": "Could not validate credentials"}
     assert malformed_response.headers["WWW-Authenticate"] == "Bearer"
+    assert malformed_delete_response.status_code == 401
+    assert malformed_delete_response.json() == {
+        "detail": "Could not validate credentials"
+    }
+    assert malformed_delete_response.headers["WWW-Authenticate"] == "Bearer"
     assert unknown_response.status_code == 401
     assert unknown_response.json() == {"detail": "Could not validate credentials"}
     assert unknown_response.headers["WWW-Authenticate"] == "Bearer"
+    assert inactive_response.status_code == 403
+    assert inactive_response.json() == {"detail": "Inactive user"}
 
 
 def test_create_rejects_unknown_assignee_without_persisting_task(
@@ -619,6 +690,138 @@ def test_create_rejects_non_member_assignee_without_persisting_task(
     assert asyncio.run(count_tasks(test_database_url)) == 0
 
 
+def test_task_role_permissions_and_hidden_nonmember_access(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+    test_database_url: str,
+) -> None:
+    created = create_task(task_client, task_context)
+    owner_headers = bearer_headers(task_context.owner_id)
+    editor_headers = bearer_headers(task_context.assignee_id)
+    viewer_headers = bearer_headers(task_context.viewer_id)
+    non_member_headers = bearer_headers(task_context.non_member_id)
+    admin_headers = bearer_headers(task_context.admin_id)
+
+    for headers in (owner_headers, editor_headers, viewer_headers, admin_headers):
+        list_response = task_client.get(
+            f"/api/v1/projects/{task_context.project_id}/tasks",
+            headers=headers,
+        )
+        get_response = task_client.get(
+            f"/api/v1/tasks/{created['id']}", headers=headers
+        )
+
+        assert list_response.status_code == 200
+        assert get_response.status_code == 200
+        assert get_response.json()["id"] == created["id"]
+
+    editor_create_response = task_client.post(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=editor_headers,
+        json={"title": "Editor task"},
+    )
+    admin_create_response = task_client.post(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=admin_headers,
+        json={"title": "Admin task"},
+    )
+    editor_update_response = task_client.patch(
+        f"/api/v1/tasks/{created['id']}",
+        headers=editor_headers,
+        json={"title": "Editor updated task"},
+    )
+
+    assert editor_create_response.status_code == 201
+    assert UUID(editor_create_response.json()["created_by"]) == task_context.assignee_id
+    assert admin_create_response.status_code == 201
+    assert UUID(admin_create_response.json()["created_by"]) == task_context.admin_id
+    assert editor_update_response.status_code == 200
+    assert editor_update_response.json()["title"] == "Editor updated task"
+
+    before_denied_writes = asyncio.run(count_tasks(test_database_url))
+    viewer_create_response = task_client.post(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=viewer_headers,
+        json={"title": "Viewer task"},
+    )
+    viewer_update_response = task_client.patch(
+        f"/api/v1/tasks/{created['id']}",
+        headers=viewer_headers,
+        json={"title": "Viewer update"},
+    )
+    viewer_delete_response = task_client.delete(
+        f"/api/v1/tasks/{created['id']}",
+        headers=viewer_headers,
+    )
+    non_member_list_response = task_client.get(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=non_member_headers,
+    )
+    non_member_get_response = task_client.get(
+        f"/api/v1/tasks/{created['id']}",
+        headers=non_member_headers,
+    )
+    non_member_create_response = task_client.post(
+        f"/api/v1/projects/{task_context.project_id}/tasks",
+        headers=non_member_headers,
+        json={"title": "Outsider task"},
+    )
+    non_member_update_response = task_client.patch(
+        f"/api/v1/tasks/{created['id']}",
+        headers=non_member_headers,
+        json={"title": "Outsider update"},
+    )
+    non_member_delete_response = task_client.delete(
+        f"/api/v1/tasks/{created['id']}",
+        headers=non_member_headers,
+    )
+
+    assert viewer_create_response.status_code == 403
+    assert viewer_update_response.status_code == 403
+    assert viewer_delete_response.status_code == 403
+    assert non_member_list_response.status_code == 404
+    assert non_member_get_response.status_code == 404
+    assert non_member_create_response.status_code == 404
+    assert non_member_update_response.status_code == 404
+    assert non_member_delete_response.status_code == 404
+    assert asyncio.run(count_tasks(test_database_url)) == before_denied_writes
+
+    editor_delete_response = task_client.delete(
+        f"/api/v1/tasks/{editor_create_response.json()['id']}",
+        headers=editor_headers,
+    )
+    admin_delete_response = task_client.delete(
+        f"/api/v1/tasks/{admin_create_response.json()['id']}",
+        headers=admin_headers,
+    )
+
+    assert editor_delete_response.status_code == 204
+    assert editor_delete_response.content == b""
+    assert admin_delete_response.status_code == 204
+    assert admin_delete_response.content == b""
+
+
+def test_task_update_authorizes_before_assignee_validation(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+) -> None:
+    created = create_task(task_client, task_context)
+
+    viewer_response = task_client.patch(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.viewer_id),
+        json={"assignee_id": str(uuid4())},
+    )
+    non_member_response = task_client.patch(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.non_member_id),
+        json={"assignee_id": str(uuid4())},
+    )
+
+    assert viewer_response.status_code == 403
+    assert non_member_response.status_code == 404
+
+
 def test_get_partial_update_clear_nullable_fields_and_delete(
     task_client: TestClient,
     task_context: TaskApiContext,
@@ -635,9 +838,13 @@ def test_get_partial_update_clear_nullable_fields_and_delete(
         },
     )
 
-    get_response = task_client.get(f"/api/v1/tasks/{created['id']}")
+    get_response = task_client.get(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
+    )
     update_response = task_client.patch(
         f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
         json={
             "title": "Updated title",
             "description": None,
@@ -647,8 +854,14 @@ def test_get_partial_update_clear_nullable_fields_and_delete(
             "due_date": None,
         },
     )
-    delete_response = task_client.delete(f"/api/v1/tasks/{created['id']}")
-    missing_after_delete = task_client.get(f"/api/v1/tasks/{created['id']}")
+    delete_response = task_client.delete(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
+    )
+    missing_after_delete = task_client.get(
+        f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert get_response.status_code == 200
     assert get_response.json() == created
@@ -679,6 +892,7 @@ def test_due_date_requires_timezone_for_create_and_update(
     created = create_task(task_client, task_context)
     update_response = task_client.patch(
         f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
         json={"due_date": "2026-08-01T09:30:00"},
     )
 
@@ -694,14 +908,17 @@ def test_update_validates_assignee_membership(
 
     valid_response = task_client.patch(
         f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
         json={"assignee_id": str(task_context.assignee_id)},
     )
     non_member_response = task_client.patch(
         f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
         json={"assignee_id": str(task_context.non_member_id)},
     )
     unknown_response = task_client.patch(
         f"/api/v1/tasks/{created['id']}",
+        headers=bearer_headers(task_context.owner_id),
         json={"assignee_id": str(uuid4())},
     )
 
@@ -711,15 +928,25 @@ def test_update_validates_assignee_membership(
     assert unknown_response.status_code == 404
 
 
-def test_missing_task_behavior(task_client: TestClient) -> None:
+def test_missing_task_behavior(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+) -> None:
     missing_task_id = uuid4()
 
-    get_response = task_client.get(f"/api/v1/tasks/{missing_task_id}")
+    get_response = task_client.get(
+        f"/api/v1/tasks/{missing_task_id}",
+        headers=bearer_headers(task_context.owner_id),
+    )
     patch_response = task_client.patch(
         f"/api/v1/tasks/{missing_task_id}",
+        headers=bearer_headers(task_context.owner_id),
         json={"title": "No task"},
     )
-    delete_response = task_client.delete(f"/api/v1/tasks/{missing_task_id}")
+    delete_response = task_client.delete(
+        f"/api/v1/tasks/{missing_task_id}",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert get_response.status_code == 404
     assert patch_response.status_code == 404
@@ -742,6 +969,7 @@ def test_title_validation_and_unknown_fields(
     )
     null_title_response = task_client.patch(
         f"/api/v1/tasks/{uuid4()}",
+        headers=bearer_headers(task_context.owner_id),
         json={"title": None},
     )
     create_unknown_response = task_client.post(
@@ -751,6 +979,7 @@ def test_title_validation_and_unknown_fields(
     )
     patch_unknown_response = task_client.patch(
         f"/api/v1/tasks/{uuid4()}",
+        headers=bearer_headers(task_context.owner_id),
         json={"created_by": str(task_context.owner_id)},
     )
 
@@ -777,7 +1006,13 @@ def test_old_unscoped_collection_routes_are_not_retained(
     assert get_response.status_code == 404
 
 
-def test_invalid_task_id_format_returns_422(task_client: TestClient) -> None:
-    response = task_client.get("/api/v1/tasks/not-a-uuid")
+def test_invalid_task_id_format_returns_422(
+    task_client: TestClient,
+    task_context: TaskApiContext,
+) -> None:
+    response = task_client.get(
+        "/api/v1/tasks/not-a-uuid",
+        headers=bearer_headers(task_context.owner_id),
+    )
 
     assert response.status_code == 422

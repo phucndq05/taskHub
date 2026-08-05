@@ -7,11 +7,11 @@ from app.api.dependencies import CurrentActiveUserDep, TaskServiceDep
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 from app.services.task import (
-    ActorNotFoundError,
     AssigneeNotFoundError,
     AssigneeNotWorkspaceMemberError,
     ProjectNotFoundError,
     TaskNotFoundError,
+    TaskPermissionError,
 )
 
 router = APIRouter(tags=["tasks"])
@@ -29,16 +29,16 @@ async def create_task(
     service: TaskServiceDep,
 ) -> TaskRead:
     try:
-        return await service.create_task(project_id, current_user.id, task)
+        return await service.create_task(current_user, project_id, task)
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found.",
         ) from exc
-    except ActorNotFoundError as exc:
+    except TaskPermissionError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Actor not found.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough task permissions.",
         ) from exc
     except AssigneeNotFoundError as exc:
         raise HTTPException(
@@ -55,6 +55,7 @@ async def create_task(
 @router.get("/projects/{project_id}/tasks", response_model=TaskListResponse)
 async def list_tasks(
     project_id: UUID,
+    current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
     task_status: Annotated[TaskStatus | None, Query(alias="status")] = None,
     priority: Annotated[TaskPriority | None, Query()] = None,
@@ -64,6 +65,7 @@ async def list_tasks(
 ) -> TaskListResponse:
     try:
         return await service.list_tasks(
+            current_user,
             project_id,
             status=task_status,
             priority=priority,
@@ -76,16 +78,30 @@ async def list_tasks(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found.",
         ) from exc
+    except TaskPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough task permissions.",
+        ) from exc
 
 
 @router.get("/tasks/{task_id}", response_model=TaskRead)
-async def get_task(task_id: UUID, service: TaskServiceDep) -> TaskRead:
+async def get_task(
+    task_id: UUID,
+    current_user: CurrentActiveUserDep,
+    service: TaskServiceDep,
+) -> TaskRead:
     try:
-        return await service.get_task(task_id)
+        return await service.get_task(current_user, task_id)
     except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
+        ) from exc
+    except TaskPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough task permissions.",
         ) from exc
 
 
@@ -93,10 +109,11 @@ async def get_task(task_id: UUID, service: TaskServiceDep) -> TaskRead:
 async def update_task(
     task_id: UUID,
     task_update: TaskUpdate,
+    current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
 ) -> TaskRead:
     try:
-        return await service.update_task(task_id, task_update)
+        return await service.update_task(current_user, task_id, task_update)
     except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,6 +123,11 @@ async def update_task(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found.",
+        ) from exc
+    except TaskPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough task permissions.",
         ) from exc
     except AssigneeNotFoundError as exc:
         raise HTTPException(
@@ -120,12 +142,21 @@ async def update_task(
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(task_id: UUID, service: TaskServiceDep) -> Response:
+async def delete_task(
+    task_id: UUID,
+    current_user: CurrentActiveUserDep,
+    service: TaskServiceDep,
+) -> Response:
     try:
-        await service.delete_task(task_id)
+        await service.delete_task(current_user, task_id)
     except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
+        ) from exc
+    except TaskPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough task permissions.",
         ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

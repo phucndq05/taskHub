@@ -10,14 +10,22 @@ only; no frontend is included.
 - Dependency injection and Pydantic v2 request/response schemas
 - `GET /health`, Swagger UI, and ReDoc
 - Layered `Router -> Service -> Repository` structure
+- Authentication with register, login, refresh rotation, logout, and current-user
+  lookup
+- User profile and password workflows
+- Workspace CRUD and membership management with `OWNER`, `EDITOR`, and `VIEWER`
+  roles
+- Project CRUD and archive lifecycle with safe delete checks
 - Persisted project-scoped Task CRUD backed by PostgreSQL
+- Project-scoped labels and task-label attach/detach workflows
+- Task comments with role and author-based deletion rules
+- Resource authorization with system `ADMIN` override and workspace-role checks
 - SQLAlchemy 2.x async configuration with request-scoped `AsyncSession`
 - PostgreSQL 16 models for the TaskHub domain
 - Alembic initial migration for the current schema
 - Ruff, mypy, pytest, Dockerfile, and Docker Compose baseline
 
-Authentication, RBAC, Redis caching, and background assignment email are not
-implemented yet.
+Redis caching and background assignment email are not implemented yet.
 
 ## Tech stack
 
@@ -123,14 +131,55 @@ Open:
 
 ```http
 GET    /health
+POST   /api/v1/auth/register
+POST   /api/v1/auth/login
+POST   /api/v1/auth/refresh
+POST   /api/v1/auth/logout
+GET    /api/v1/users/me
+PATCH  /api/v1/users/me
+POST   /api/v1/users/me/password
+POST   /api/v1/workspaces
+GET    /api/v1/workspaces
+GET    /api/v1/workspaces/{workspace_id}
+PATCH  /api/v1/workspaces/{workspace_id}
+DELETE /api/v1/workspaces/{workspace_id}
+GET    /api/v1/workspaces/{workspace_id}/members
+POST   /api/v1/workspaces/{workspace_id}/members
+PATCH  /api/v1/workspaces/{workspace_id}/members/{user_id}
+DELETE /api/v1/workspaces/{workspace_id}/members/{user_id}
+POST   /api/v1/workspaces/{workspace_id}/projects
+GET    /api/v1/workspaces/{workspace_id}/projects
+GET    /api/v1/projects/{project_id}
+PATCH  /api/v1/projects/{project_id}
+PATCH  /api/v1/projects/{project_id}/archive
+DELETE /api/v1/projects/{project_id}
 POST   /api/v1/projects/{project_id}/tasks
 GET    /api/v1/projects/{project_id}/tasks
 GET    /api/v1/tasks/{task_id}
 PATCH  /api/v1/tasks/{task_id}
 DELETE /api/v1/tasks/{task_id}
+POST   /api/v1/projects/{project_id}/labels
+GET    /api/v1/projects/{project_id}/labels
+GET    /api/v1/labels/{label_id}
+PATCH  /api/v1/labels/{label_id}
+DELETE /api/v1/labels/{label_id}
+POST   /api/v1/tasks/{task_id}/labels/{label_id}
+DELETE /api/v1/tasks/{task_id}/labels/{label_id}
+POST   /api/v1/tasks/{task_id}/comments
+DELETE /api/v1/comments/{comment_id}
 ```
 
 Swagger UI and ReDoc are the source for detailed request and response schemas.
+
+## Roles
+
+TaskHub has a system-level `ADMIN` override. Normal resource access is controlled
+by workspace membership:
+
+- `OWNER`: workspace administration, project administration, and task, label, and
+  comment workflows
+- `EDITOR`: project writes plus task, label, and comment workflows
+- `VIEWER`: permitted read operations only
 
 ## Quality checks
 
@@ -166,8 +215,7 @@ and local email services will be added in later focused changes.
 
 ## Current limitations
 
-- Authentication, User/Workspace/Project APIs, RBAC, labels, comments, Redis, and
-  background email are not implemented yet.
+- Redis caching and background assignment email are not implemented yet.
 - Docker does not yet run migrations automatically.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
