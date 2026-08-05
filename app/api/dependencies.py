@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.db.session import AsyncSessionFactory
 from app.models.user import User
+from app.repositories.comment import CommentRepository
 from app.repositories.label import LabelRepository
 from app.repositories.project import ProjectRepository
 from app.repositories.refresh_token import RefreshTokenRepository
@@ -19,6 +20,7 @@ from app.services.auth import (
     InactiveUserError,
     InvalidAccessTokenError,
 )
+from app.services.comment import CommentService
 from app.services.label import LabelService
 from app.services.project import ProjectService
 from app.services.task import TaskService
@@ -109,6 +111,17 @@ def get_label_repository(session: DatabaseSessionDep) -> LabelRepository:
 LabelRepositoryDep = Annotated[
     LabelRepository,
     Depends(get_label_repository),
+]
+
+
+def get_comment_repository(session: DatabaseSessionDep) -> CommentRepository:
+    """Create a comment repository from the current request session."""
+    return CommentRepository(session)
+
+
+CommentRepositoryDep = Annotated[
+    CommentRepository,
+    Depends(get_comment_repository),
 ]
 
 
@@ -241,3 +254,15 @@ def get_label_service(
 
 
 LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
+
+
+def get_comment_service(
+    comment_repository: CommentRepositoryDep,
+    workspace_repository: WorkspaceRepositoryDep,
+    session: DatabaseSessionDep,
+) -> CommentService:
+    """Create a comment service for the current request."""
+    return CommentService(comment_repository, workspace_repository, session)
+
+
+CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
