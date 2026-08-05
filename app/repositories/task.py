@@ -11,6 +11,8 @@ from app.models.user import User
 from app.models.workspace_member import WorkspaceMember
 from app.repositories.base import BaseRepository
 
+TaskContext = tuple[Task, Project]
+
 
 class TaskRepository(BaseRepository[Task]):
     """Persist Task data with SQLAlchemy async sessions."""
@@ -20,6 +22,19 @@ class TaskRepository(BaseRepository[Task]):
 
     async def get_project(self, project_id: UUID) -> Project | None:
         return await self._session.get(Project, project_id)
+
+    async def get_task_context(self, task_id: UUID) -> TaskContext | None:
+        statement = (
+            select(Task, Project)
+            .join(Project, Project.id == Task.project_id)
+            .where(Task.id == task_id)
+        )
+        row = (await self._session.execute(statement)).one_or_none()
+        if row is None:
+            return None
+
+        task, project = row
+        return task, project
 
     async def user_exists(self, user_id: UUID) -> bool:
         user = await self._session.get(User, user_id)

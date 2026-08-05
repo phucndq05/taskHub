@@ -1,11 +1,20 @@
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import TaskPriority, TaskStatus
+from app.models.enums import TaskPriority, TaskStatus, WorkspaceMemberRole
+from app.models.project import Project
 from app.models.task import Task
+from app.models.user import User
 from app.repositories.task import TaskRepository
+from app.repositories.workspace import WorkspaceRepository
 from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
+from app.services.authorization import (
+    get_workspace_member,
+    is_admin,
+    workspace_role_is_allowed,
+)
 
 
 class ProjectNotFoundError(Exception):
@@ -16,8 +25,8 @@ class TaskNotFoundError(Exception):
     """Raised when a task does not exist."""
 
 
-class ActorNotFoundError(Exception):
-    """Raised when the temporary actor user does not exist."""
+class TaskPermissionError(Exception):
+    """Raised when a known workspace member lacks task permission."""
 
 
 class AssigneeNotFoundError(Exception):
@@ -31,23 +40,30 @@ class AssigneeNotWorkspaceMemberError(Exception):
 class TaskService:
     """Coordinate task business rules and transaction boundaries."""
 
-    def __init__(self, repository: TaskRepository, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        repository: TaskRepository,
+        workspace_repository: WorkspaceRepository,
+        session: AsyncSession,
+    ) -> None:
         self._repository = repository
+        self._workspace_repository = workspace_repository
         self._session = session
 
     async def create_task(
         self,
+        current_user: User,
         project_id: UUID,
-        actor_id: UUID,
         task: TaskCreate,
     ) -> TaskRead:
-        project = await self._repository.get_project(project_id)
-        if project is None:
-            raise ProjectNotFoundError
-
-        actor_exists = await self._repository.user_exists(actor_id)
-        if not actor_exists:
-            raise ActorNotFoundError
+        project = await self._get_project_for_action(
+            current_user,
+            project_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+            ),
+        )
 
         if task.assignee_id is not None:
             await self._validate_assignee(project.workspace_id, task.assignee_id)
@@ -60,7 +76,7 @@ class TaskService:
             status=task.status,
             priority=task.priority,
             due_date=task.due_date,
-            created_by=actor_id,
+            created_by=current_user.id,
         )
         created_task = await self._repository.create(task_model)
         await self._commit()
@@ -68,6 +84,7 @@ class TaskService:
 
     async def list_tasks(
         self,
+        current_user: User,
         project_id: UUID,
         *,
         status: TaskStatus | None,
@@ -76,9 +93,15 @@ class TaskService:
         page: int,
         limit: int,
     ) -> TaskListResponse:
-        project = await self._repository.get_project(project_id)
-        if project is None:
-            raise ProjectNotFoundError
+        await self._get_project_for_action(
+            current_user,
+            project_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+                WorkspaceMemberRole.VIEWER,
+            ),
+        )
 
         total = await self._repository.count_by_project(
             project_id,
@@ -103,24 +126,37 @@ class TaskService:
             total_pages=total_pages,
         )
 
-    async def get_task(self, task_id: UUID) -> TaskRead:
-        task = await self._repository.get(task_id)
-        if task is None:
-            raise TaskNotFoundError
+    async def get_task(self, current_user: User, task_id: UUID) -> TaskRead:
+        task, _ = await self._get_task_for_action(
+            current_user,
+            task_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+                WorkspaceMemberRole.VIEWER,
+            ),
+        )
         return self._to_read_model(task)
 
-    async def update_task(self, task_id: UUID, task_update: TaskUpdate) -> TaskRead:
-        task = await self._repository.get(task_id)
-        if task is None:
-            raise TaskNotFoundError
+    async def update_task(
+        self,
+        current_user: User,
+        task_id: UUID,
+        task_update: TaskUpdate,
+    ) -> TaskRead:
+        task, project = await self._get_task_for_action(
+            current_user,
+            task_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+            ),
+        )
 
         if (
             "assignee_id" in task_update.model_fields_set
             and task_update.assignee_id is not None
         ):
-            project = await self._repository.get_project(task.project_id)
-            if project is None:
-                raise ProjectNotFoundError
             await self._validate_assignee(project.workspace_id, task_update.assignee_id)
 
         if "title" in task_update.model_fields_set:
@@ -143,10 +179,15 @@ class TaskService:
         await self._commit()
         return self._to_read_model(updated_task)
 
-    async def delete_task(self, task_id: UUID) -> None:
-        task = await self._repository.get(task_id)
-        if task is None:
-            raise TaskNotFoundError
+    async def delete_task(self, current_user: User, task_id: UUID) -> None:
+        task, _ = await self._get_task_for_action(
+            current_user,
+            task_id,
+            allowed_roles=(
+                WorkspaceMemberRole.OWNER,
+                WorkspaceMemberRole.EDITOR,
+            ),
+        )
 
         await self._repository.delete(task)
         await self._commit()
@@ -162,6 +203,66 @@ class TaskService:
         )
         if not is_member:
             raise AssigneeNotWorkspaceMemberError
+
+    async def _get_project_for_action(
+        self,
+        current_user: User,
+        project_id: UUID,
+        *,
+        allowed_roles: Collection[WorkspaceMemberRole],
+    ) -> Project:
+        project = await self._repository.get_project(project_id)
+        if project is None:
+            raise ProjectNotFoundError
+
+        await self._authorize_project_workspace(
+            current_user,
+            project.workspace_id,
+            hidden_error=ProjectNotFoundError,
+            allowed_roles=allowed_roles,
+        )
+        return project
+
+    async def _get_task_for_action(
+        self,
+        current_user: User,
+        task_id: UUID,
+        *,
+        allowed_roles: Collection[WorkspaceMemberRole],
+    ) -> tuple[Task, Project]:
+        context = await self._repository.get_task_context(task_id)
+        if context is None:
+            raise TaskNotFoundError
+
+        task, project = context
+        await self._authorize_project_workspace(
+            current_user,
+            project.workspace_id,
+            hidden_error=TaskNotFoundError,
+            allowed_roles=allowed_roles,
+        )
+        return task, project
+
+    async def _authorize_project_workspace(
+        self,
+        current_user: User,
+        workspace_id: UUID,
+        *,
+        hidden_error: type[Exception],
+        allowed_roles: Collection[WorkspaceMemberRole],
+    ) -> None:
+        if is_admin(current_user):
+            return
+
+        member = await get_workspace_member(
+            self._workspace_repository,
+            workspace_id,
+            current_user.id,
+        )
+        if member is None:
+            raise hidden_error
+        if not workspace_role_is_allowed(member.role, allowed_roles):
+            raise TaskPermissionError
 
     async def _commit(self) -> None:
         try:
