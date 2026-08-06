@@ -78,6 +78,13 @@ def build_mock_session() -> tuple[AsyncSession, AsyncMock, AsyncMock, AsyncMock]
     return cast(AsyncSession, session_mock), rollback_mock, close_mock, commit_mock
 
 
+def build_mock_redis_client() -> tuple[object, AsyncMock]:
+    redis_client = MagicMock()
+    aclose_mock = AsyncMock()
+    redis_client.aclose = aclose_mock
+    return redis_client, aclose_mock
+
+
 def build_session_factory(
     *sessions: AsyncSession,
 ) -> tuple[AsyncSessionFactory, MagicMock]:
@@ -88,6 +95,8 @@ def build_session_factory(
 def assert_database_state_absent(app: FastAPI) -> None:
     assert not hasattr(app.state, "database_engine")
     assert not hasattr(app.state, "database_session_factory")
+    assert not hasattr(app.state, "redis_client")
+    assert not hasattr(app.state, "task_list_cache")
 
 
 def test_import_main_does_not_require_database_url(
@@ -145,23 +154,42 @@ async def test_lifespan_initializes_and_cleans_database_resources(
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
     monkeypatch.setenv("JWT_SECRET_KEY", VALID_JWT_SECRET_KEY)
     engine, dispose_mock = build_mock_engine()
+    redis_client, redis_close_mock = build_mock_redis_client()
+    task_list_cache = object()
 
     def fake_create_database_engine(database_url: str) -> AsyncEngine:
         assert database_url == VALID_DATABASE_URL
         return engine
+
+    def fake_create_redis_client(redis_url: str) -> object:
+        assert redis_url == "redis://localhost:6379/0"
+        return redis_client
 
     monkeypatch.setattr(
         main_module,
         "create_database_engine",
         fake_create_database_engine,
     )
+    monkeypatch.setattr(
+        main_module,
+        "create_redis_client",
+        fake_create_redis_client,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "create_task_list_cache",
+        lambda created_redis_client, ttl_seconds: task_list_cache,
+    )
     app = main_module.create_app()
 
     async with LifespanManager(app):
         assert app.state.database_engine is engine
         assert isinstance(app.state.database_session_factory, async_sessionmaker)
+        assert app.state.redis_client is redis_client
+        assert app.state.task_list_cache is task_list_cache
 
     assert_database_state_absent(app)
+    redis_close_mock.assert_awaited_once()
     dispose_mock.assert_awaited_once()
 
 
