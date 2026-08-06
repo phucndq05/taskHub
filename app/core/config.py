@@ -1,7 +1,7 @@
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, field_validator
+from pydantic import EmailStr, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     redis_url: str = "redis://localhost:6379/0"
     task_list_cache_ttl_seconds: int = 60
+    smtp_host: str | None = None
+    smtp_port: int = 1025
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from_email: EmailStr = "no-reply@example.com"
+    smtp_use_starttls: bool = False
+    smtp_timeout_seconds: float = 10.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -90,6 +97,67 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("TASK_LIST_CACHE_TTL_SECONDS must be positive.")
         return value
+
+    @field_validator("smtp_host", "smtp_username", mode="before")
+    @classmethod
+    def normalize_optional_smtp_string(cls, value: object) -> str | None:
+        """Normalize optional SMTP string settings."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("SMTP optional string settings must be strings.")
+
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("smtp_password", mode="before")
+    @classmethod
+    def normalize_optional_smtp_password(cls, value: object) -> str | None:
+        """Normalize optional SMTP password settings."""
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            normalized = value.get_secret_value().strip()
+            return normalized or None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        raise ValueError("SMTP_PASSWORD must be a string.")
+
+    @field_validator("smtp_from_email", mode="before")
+    @classmethod
+    def normalize_smtp_from_email(cls, value: object) -> object:
+        """Trim the SMTP sender address before EmailStr validation."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("smtp_port")
+    @classmethod
+    def validate_smtp_port(cls, value: int) -> int:
+        """Validate the SMTP port range."""
+        if value < 1 or value > 65535:
+            raise ValueError("SMTP_PORT must be from 1 through 65535.")
+        return value
+
+    @field_validator("smtp_timeout_seconds")
+    @classmethod
+    def validate_smtp_timeout_seconds(cls, value: float) -> float:
+        """Validate the SMTP connection timeout."""
+        if value <= 0:
+            raise ValueError("SMTP_TIMEOUT_SECONDS must be greater than zero.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_smtp_credentials(self) -> "Settings":
+        """Require SMTP username and password to be configured together."""
+        has_username = self.smtp_username is not None
+        has_password = self.smtp_password is not None
+        if has_username != has_password:
+            raise ValueError(
+                "SMTP_USERNAME and SMTP_PASSWORD must be supplied together."
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

@@ -1,9 +1,10 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
 
-from app.api.dependencies import CurrentActiveUserDep, TaskServiceDep
+from app.api.dependencies import CurrentActiveUserDep, EmailSenderDep, TaskServiceDep
+from app.integrations.email import send_assignment_email_safely
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 from app.services.task import (
@@ -25,11 +26,20 @@ router = APIRouter(tags=["tasks"])
 async def create_task(
     project_id: UUID,
     task: TaskCreate,
+    background_tasks: BackgroundTasks,
     current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
+    email_sender: EmailSenderDep,
 ) -> TaskRead:
     try:
-        return await service.create_task(current_user, project_id, task)
+        result = await service.create_task(current_user, project_id, task)
+        if result.assignment_email is not None:
+            background_tasks.add_task(
+                send_assignment_email_safely,
+                email_sender,
+                result.assignment_email,
+            )
+        return result.task
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -109,11 +119,20 @@ async def get_task(
 async def update_task(
     task_id: UUID,
     task_update: TaskUpdate,
+    background_tasks: BackgroundTasks,
     current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
+    email_sender: EmailSenderDep,
 ) -> TaskRead:
     try:
-        return await service.update_task(current_user, task_id, task_update)
+        result = await service.update_task(current_user, task_id, task_update)
+        if result.assignment_email is not None:
+            background_tasks.add_task(
+                send_assignment_email_safely,
+                email_sender,
+                result.assignment_email,
+            )
+        return result.task
     except TaskNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
