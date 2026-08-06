@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.db.session import AsyncSessionFactory
 from app.integrations.cache import TaskListCache
+from app.integrations.email import DisabledEmailSender, EmailSender, SmtpEmailSender
 from app.models.user import User
 from app.repositories.comment import CommentRepository
 from app.repositories.label import LabelRepository
@@ -55,6 +56,31 @@ DatabaseSessionFactoryDep = Annotated[
     Depends(get_database_session_factory),
 ]
 TaskListCacheDep = Annotated[TaskListCache | None, Depends(get_task_list_cache)]
+
+
+def get_email_sender() -> EmailSender:
+    """Return the configured task-assignment email sender."""
+    settings = get_settings()
+    if settings.smtp_host is None:
+        return DisabledEmailSender()
+
+    password = (
+        None
+        if settings.smtp_password is None
+        else settings.smtp_password.get_secret_value()
+    )
+    return SmtpEmailSender(
+        host=settings.smtp_host,
+        port=settings.smtp_port,
+        username=settings.smtp_username,
+        password=password,
+        from_email=str(settings.smtp_from_email),
+        use_starttls=settings.smtp_use_starttls,
+        timeout_seconds=settings.smtp_timeout_seconds,
+    )
+
+
+EmailSenderDep = Annotated[EmailSender, Depends(get_email_sender)]
 
 
 async def get_database_session(
@@ -220,12 +246,19 @@ CurrentActiveUserDep = Annotated[User, Depends(get_current_active_user)]
 
 def get_task_service(
     repository: TaskRepositoryDep,
+    user_repository: UserRepositoryDep,
     workspace_repository: WorkspaceRepositoryDep,
     session: DatabaseSessionDep,
     task_list_cache: TaskListCacheDep,
 ) -> TaskService:
     """Create a task service for the current request."""
-    return TaskService(repository, workspace_repository, session, task_list_cache)
+    return TaskService(
+        repository,
+        user_repository,
+        workspace_repository,
+        session,
+        task_list_cache,
+    )
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]

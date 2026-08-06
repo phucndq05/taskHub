@@ -1,14 +1,17 @@
 from collections.abc import Collection
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.cache import TaskListCache
+from app.integrations.email import AssignmentEmailPayload
 from app.models.enums import TaskPriority, TaskStatus, WorkspaceMemberRole
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
 from app.repositories.task import TaskRepository
+from app.repositories.user import UserRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.schemas.task import TaskCreate, TaskListResponse, TaskRead, TaskUpdate
 from app.services.authorization import (
@@ -38,17 +41,27 @@ class AssigneeNotWorkspaceMemberError(Exception):
     """Raised when the assignee is not a member of the project workspace."""
 
 
+@dataclass(frozen=True)
+class TaskMutationResult:
+    """Task mutation response plus optional post-commit assignment email payload."""
+
+    task: TaskRead
+    assignment_email: AssignmentEmailPayload | None
+
+
 class TaskService:
     """Coordinate task business rules and transaction boundaries."""
 
     def __init__(
         self,
         repository: TaskRepository,
+        user_repository: UserRepository,
         workspace_repository: WorkspaceRepository,
         session: AsyncSession,
         task_list_cache: TaskListCache | None = None,
     ) -> None:
         self._repository = repository
+        self._user_repository = user_repository
         self._workspace_repository = workspace_repository
         self._session = session
         self._task_list_cache = task_list_cache
@@ -58,7 +71,7 @@ class TaskService:
         current_user: User,
         project_id: UUID,
         task: TaskCreate,
-    ) -> TaskRead:
+    ) -> TaskMutationResult:
         project = await self._get_project_for_action(
             current_user,
             project_id,
@@ -68,8 +81,12 @@ class TaskService:
             ),
         )
 
+        assignee: User | None = None
         if task.assignee_id is not None:
-            await self._validate_assignee(project.workspace_id, task.assignee_id)
+            assignee = await self._validate_assignee(
+                project.workspace_id,
+                task.assignee_id,
+            )
 
         task_model = Task(
             project_id=project_id,
@@ -84,7 +101,15 @@ class TaskService:
         created_task = await self._repository.create(task_model)
         await self._commit()
         await self._invalidate_task_list(project_id)
-        return self._to_read_model(created_task)
+        return TaskMutationResult(
+            task=self._to_read_model(created_task),
+            assignment_email=self._build_assignment_email_payload(
+                assignee=assignee,
+                task=created_task,
+                project=project,
+                assigner=current_user,
+            ),
+        )
 
     async def list_tasks(
         self,
@@ -173,7 +198,7 @@ class TaskService:
         current_user: User,
         task_id: UUID,
         task_update: TaskUpdate,
-    ) -> TaskRead:
+    ) -> TaskMutationResult:
         task, project = await self._get_task_for_action(
             current_user,
             task_id,
@@ -183,11 +208,17 @@ class TaskService:
             ),
         )
 
+        previous_assignee_id = task.assignee_id
+        assignee: User | None = None
         if (
             "assignee_id" in task_update.model_fields_set
             and task_update.assignee_id is not None
+            and task_update.assignee_id != previous_assignee_id
         ):
-            await self._validate_assignee(project.workspace_id, task_update.assignee_id)
+            assignee = await self._validate_assignee(
+                project.workspace_id,
+                task_update.assignee_id,
+            )
 
         if "title" in task_update.model_fields_set:
             assert task_update.title is not None
@@ -208,7 +239,15 @@ class TaskService:
         updated_task = await self._repository.update(task)
         await self._commit()
         await self._invalidate_task_list(project.id)
-        return self._to_read_model(updated_task)
+        return TaskMutationResult(
+            task=self._to_read_model(updated_task),
+            assignment_email=self._build_assignment_email_payload(
+                assignee=assignee,
+                task=updated_task,
+                project=project,
+                assigner=current_user,
+            ),
+        )
 
     async def delete_task(self, current_user: User, task_id: UUID) -> None:
         task, _ = await self._get_task_for_action(
@@ -283,9 +322,9 @@ class TaskService:
             return
         await self._task_list_cache.invalidate_project(project_id)
 
-    async def _validate_assignee(self, workspace_id: UUID, assignee_id: UUID) -> None:
-        assignee_exists = await self._repository.user_exists(assignee_id)
-        if not assignee_exists:
+    async def _validate_assignee(self, workspace_id: UUID, assignee_id: UUID) -> User:
+        assignee = await self._user_repository.get_by_id(assignee_id)
+        if assignee is None:
             raise AssigneeNotFoundError
 
         is_member = await self._repository.workspace_member_exists(
@@ -294,6 +333,27 @@ class TaskService:
         )
         if not is_member:
             raise AssigneeNotWorkspaceMemberError
+
+        return assignee
+
+    def _build_assignment_email_payload(
+        self,
+        *,
+        assignee: User | None,
+        task: Task,
+        project: Project,
+        assigner: User,
+    ) -> AssignmentEmailPayload | None:
+        if assignee is None:
+            return None
+        return AssignmentEmailPayload(
+            recipient_email=assignee.email,
+            recipient_name=assignee.full_name,
+            task_id=str(task.id),
+            task_title=task.title,
+            project_name=project.name,
+            assigner_name=assigner.full_name,
+        )
 
     async def _get_project_for_action(
         self,

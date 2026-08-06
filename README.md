@@ -20,13 +20,12 @@ only; no frontend is included.
 - Project-scoped labels and task-label attach/detach workflows
 - Task comments with role and author-based deletion rules
 - Redis caching for authorized project-scoped Task lists with 60-second TTL
+- Background task-assignment email through FastAPI `BackgroundTasks`
 - Resource authorization with system `ADMIN` override and workspace-role checks
 - SQLAlchemy 2.x async configuration with request-scoped `AsyncSession`
 - PostgreSQL 16 models for the TaskHub domain
 - Alembic initial migration for the current schema
 - Ruff, mypy, pytest, Dockerfile, and Docker Compose baseline
-
-Background assignment email is not implemented yet.
 
 ## Tech stack
 
@@ -100,6 +99,21 @@ Task list caching uses:
 `GET /api/v1/projects/{project_id}/tasks` is cached only after authentication,
 active-user checks, project lookup, and resource authorization succeed. Redis is
 an optimization; PostgreSQL remains the source of truth if Redis is unavailable.
+
+Task assignment email uses FastAPI `BackgroundTasks`. PostgreSQL commits and
+task-list cache invalidation complete before the email task is scheduled. SMTP
+delivery failures are logged after commit and do not roll back assignments or
+change successful API responses.
+
+SMTP is disabled when `SMTP_HOST` is empty. To enable local SMTP delivery, set:
+
+- `SMTP_HOST`
+- `SMTP_PORT`, default `1025`
+- `SMTP_USERNAME`, optional but must be paired with `SMTP_PASSWORD`
+- `SMTP_PASSWORD`, optional but must be paired with `SMTP_USERNAME`
+- `SMTP_FROM_EMAIL`, default `no-reply@example.com`
+- `SMTP_USE_STARTTLS`, default `false`
+- `SMTP_TIMEOUT_SECONDS`, default `10`
 
 ## Database and migrations
 
@@ -222,11 +236,10 @@ uvicorn app.main:app --reload
 ```
 
 Docker API startup, automatic migration wiring, Redis service wiring, and local
-email services will be added in later focused changes.
+email service wiring will be added in later focused changes.
 
 ## Current limitations
 
-- Background assignment email is not implemented yet.
 - Docker does not yet run migrations automatically.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
