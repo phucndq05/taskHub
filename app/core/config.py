@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -6,6 +7,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 SUPPORTED_JWT_ALGORITHMS = {"HS256"}
+SUPPORTED_REDIS_SCHEMES = {"redis", "rediss"}
 
 
 class Settings(BaseSettings):
@@ -14,6 +16,8 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret_key: SecretStr
     jwt_algorithm: str = "HS256"
+    redis_url: str = "redis://localhost:6379/0"
+    task_list_cache_ttl_seconds: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -59,6 +63,33 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be HS256.")
 
         return algorithm
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def validate_redis_url(cls, value: object) -> str:
+        """Validate the Redis URL format without opening a connection."""
+        if not isinstance(value, str):
+            raise ValueError("REDIS_URL must be a string.")
+
+        redis_url = value.strip()
+        if not redis_url:
+            raise ValueError("REDIS_URL must not be empty.")
+
+        parsed_url = urlparse(redis_url)
+        if parsed_url.scheme not in SUPPORTED_REDIS_SCHEMES:
+            raise ValueError("REDIS_URL must use the redis or rediss scheme.")
+        if not parsed_url.hostname:
+            raise ValueError("REDIS_URL must include a host.")
+
+        return redis_url
+
+    @field_validator("task_list_cache_ttl_seconds")
+    @classmethod
+    def validate_task_list_cache_ttl_seconds(cls, value: int) -> int:
+        """Validate the task-list cache TTL."""
+        if value <= 0:
+            raise ValueError("TASK_LIST_CACHE_TTL_SECONDS must be positive.")
+        return value
 
 
 @lru_cache(maxsize=1)
