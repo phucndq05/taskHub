@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
 from app.db.session import AsyncSessionFactory
+from app.integrations.cache import TaskListCache
 from app.models.user import User
 from app.repositories.comment import CommentRepository
 from app.repositories.label import LabelRepository
@@ -42,10 +43,18 @@ def get_database_session_factory(request: Request) -> AsyncSessionFactory:
     return cast(AsyncSessionFactory, session_factory)
 
 
+def get_task_list_cache(request: Request) -> TaskListCache | None:
+    """Return the app-level task-list cache integration when available."""
+    return cast(
+        TaskListCache | None, getattr(request.app.state, "task_list_cache", None)
+    )
+
+
 DatabaseSessionFactoryDep = Annotated[
     AsyncSessionFactory,
     Depends(get_database_session_factory),
 ]
+TaskListCacheDep = Annotated[TaskListCache | None, Depends(get_task_list_cache)]
 
 
 async def get_database_session(
@@ -213,9 +222,10 @@ def get_task_service(
     repository: TaskRepositoryDep,
     workspace_repository: WorkspaceRepositoryDep,
     session: DatabaseSessionDep,
+    task_list_cache: TaskListCacheDep,
 ) -> TaskService:
     """Create a task service for the current request."""
-    return TaskService(repository, workspace_repository, session)
+    return TaskService(repository, workspace_repository, session, task_list_cache)
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]

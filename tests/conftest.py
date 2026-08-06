@@ -11,9 +11,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import create_async_engine
 
+import app.main as main_module
 from alembic import command
 from app.core.config import get_settings
-from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
@@ -32,6 +32,29 @@ DOMAIN_TABLES = (
     "refresh_tokens",
     "users",
 )
+
+
+class NoOpRedisClient:
+    """Redis client replacement for tests that should not use the network."""
+
+    async def aclose(self) -> None:
+        return None
+
+
+class NoOpTaskListCache:
+    """Task-list cache replacement for ordinary PostgreSQL tests."""
+
+    async def get_project_version(self, project_id: object) -> None:
+        return None
+
+    async def get_task_list(self, project_id: object, **kwargs: object) -> None:
+        return None
+
+    async def set_task_list(self, project_id: object, **kwargs: object) -> None:
+        return None
+
+    async def invalidate_project(self, project_id: object) -> None:
+        return None
 
 
 def _validated_test_database_url() -> str:
@@ -165,9 +188,19 @@ def client(
     monkeypatch.setenv("DATABASE_URL", LIGHTWEIGHT_TEST_DATABASE_URL)
     monkeypatch.setenv("JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
+    monkeypatch.setattr(
+        main_module,
+        "create_redis_client",
+        lambda redis_url: NoOpRedisClient(),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "create_task_list_cache",
+        lambda redis_client, ttl_seconds: NoOpTaskListCache(),
+    )
     get_settings.cache_clear()
     try:
-        with TestClient(create_app()) as test_client:
+        with TestClient(main_module.create_app()) as test_client:
             yield test_client
     finally:
         get_settings.cache_clear()
@@ -175,8 +208,19 @@ def client(
 
 @pytest.fixture
 def task_client(
+    monkeypatch: pytest.MonkeyPatch,
     configured_database_url: None,
     clean_test_database: None,
 ) -> Generator[TestClient, None, None]:
-    with TestClient(create_app()) as test_client:
+    monkeypatch.setattr(
+        main_module,
+        "create_redis_client",
+        lambda redis_url: NoOpRedisClient(),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "create_task_list_cache",
+        lambda redis_client, ttl_seconds: NoOpTaskListCache(),
+    )
+    with TestClient(main_module.create_app()) as test_client:
         yield test_client

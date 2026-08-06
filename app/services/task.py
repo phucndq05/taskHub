@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.cache import TaskListCache
 from app.models.enums import TaskPriority, TaskStatus, WorkspaceMemberRole
 from app.models.project import Project
 from app.models.task import Task
@@ -45,10 +46,12 @@ class TaskService:
         repository: TaskRepository,
         workspace_repository: WorkspaceRepository,
         session: AsyncSession,
+        task_list_cache: TaskListCache | None = None,
     ) -> None:
         self._repository = repository
         self._workspace_repository = workspace_repository
         self._session = session
+        self._task_list_cache = task_list_cache
 
     async def create_task(
         self,
@@ -80,6 +83,7 @@ class TaskService:
         )
         created_task = await self._repository.create(task_model)
         await self._commit()
+        await self._invalidate_task_list(project_id)
         return self._to_read_model(created_task)
 
     async def list_tasks(
@@ -103,6 +107,20 @@ class TaskService:
             ),
         )
 
+        cache_version = await self._get_task_list_cache_version(project_id)
+        if cache_version is not None:
+            cached_response = await self._get_cached_task_list(
+                project_id,
+                version=cache_version,
+                status=status,
+                priority=priority,
+                assignee_id=assignee_id,
+                page=page,
+                limit=limit,
+            )
+            if cached_response is not None:
+                return cached_response
+
         total = await self._repository.count_by_project(
             project_id,
             status=status,
@@ -118,13 +136,25 @@ class TaskService:
             limit=limit,
         )
         total_pages = 0 if total == 0 else (total + limit - 1) // limit
-        return TaskListResponse(
+        response = TaskListResponse(
             items=[self._to_read_model(task) for task in tasks],
             page=page,
             limit=limit,
             total=total,
             total_pages=total_pages,
         )
+        if cache_version is not None:
+            await self._set_cached_task_list(
+                project_id,
+                version=cache_version,
+                status=status,
+                priority=priority,
+                assignee_id=assignee_id,
+                page=page,
+                limit=limit,
+                response=response,
+            )
+        return response
 
     async def get_task(self, current_user: User, task_id: UUID) -> TaskRead:
         task, _ = await self._get_task_for_action(
@@ -177,6 +207,7 @@ class TaskService:
 
         updated_task = await self._repository.update(task)
         await self._commit()
+        await self._invalidate_task_list(project.id)
         return self._to_read_model(updated_task)
 
     async def delete_task(self, current_user: User, task_id: UUID) -> None:
@@ -188,9 +219,69 @@ class TaskService:
                 WorkspaceMemberRole.EDITOR,
             ),
         )
+        project_id = task.project_id
 
         await self._repository.delete(task)
         await self._commit()
+        await self._invalidate_task_list(project_id)
+
+    async def _get_task_list_cache_version(self, project_id: UUID) -> str | None:
+        if self._task_list_cache is None:
+            return None
+        return await self._task_list_cache.get_project_version(project_id)
+
+    async def _get_cached_task_list(
+        self,
+        project_id: UUID,
+        *,
+        version: str,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+        page: int,
+        limit: int,
+    ) -> TaskListResponse | None:
+        if self._task_list_cache is None:
+            return None
+        return await self._task_list_cache.get_task_list(
+            project_id,
+            version=version,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+            page=page,
+            limit=limit,
+        )
+
+    async def _set_cached_task_list(
+        self,
+        project_id: UUID,
+        *,
+        version: str,
+        status: TaskStatus | None,
+        priority: TaskPriority | None,
+        assignee_id: UUID | None,
+        page: int,
+        limit: int,
+        response: TaskListResponse,
+    ) -> None:
+        if self._task_list_cache is None:
+            return
+        await self._task_list_cache.set_task_list(
+            project_id,
+            version=version,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+            page=page,
+            limit=limit,
+            response=response,
+        )
+
+    async def _invalidate_task_list(self, project_id: UUID) -> None:
+        if self._task_list_cache is None:
+            return
+        await self._task_list_cache.invalidate_project(project_id)
 
     async def _validate_assignee(self, workspace_id: UUID, assignee_id: UUID) -> None:
         assignee_exists = await self._repository.user_exists(assignee_id)

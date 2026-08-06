@@ -1,28 +1,56 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 from fastapi import FastAPI
+from redis import asyncio as redis
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.session import create_database_engine, create_database_session_factory
+from app.integrations.cache import TaskListCache
+
+
+def create_redis_client(redis_url: str) -> Redis:
+    """Create a Redis client without opening a network connection."""
+    return cast(Redis, redis.from_url(redis_url, decode_responses=True))
+
+
+def create_task_list_cache(redis_client: Redis, ttl_seconds: int) -> TaskListCache:
+    """Create the task-list cache integration."""
+    return TaskListCache(redis_client, ttl_seconds=ttl_seconds)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize application resources for one FastAPI app instance."""
     engine: AsyncEngine | None = None
+    redis_client: Redis | None = None
     try:
         settings = get_settings()
         engine = create_database_engine(settings.database_url)
         session_factory = create_database_session_factory(engine)
+        redis_client = create_redis_client(settings.redis_url)
+        task_list_cache = create_task_list_cache(
+            redis_client,
+            settings.task_list_cache_ttl_seconds,
+        )
 
         app.state.database_engine = engine
         app.state.database_session_factory = session_factory
+        app.state.redis_client = redis_client
+        app.state.task_list_cache = task_list_cache
 
         yield
     finally:
+        if hasattr(app.state, "task_list_cache"):
+            del app.state.task_list_cache
+        if hasattr(app.state, "redis_client"):
+            del app.state.redis_client
+        if redis_client is not None:
+            await redis_client.aclose()
         if hasattr(app.state, "database_session_factory"):
             del app.state.database_session_factory
         if hasattr(app.state, "database_engine"):
