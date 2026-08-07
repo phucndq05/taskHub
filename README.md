@@ -43,6 +43,7 @@ only; no frontend is included.
 | 10 | Background assignment email | [#14](https://github.com/phucndq05/taskHub/pull/14) |
 | 11 | RBAC | [#12](https://github.com/phucndq05/taskHub/pull/12) |
 | 12 | Swagger / ReDoc | [#15](https://github.com/phucndq05/taskHub/pull/15) |
+| 13 | Docker Compose | [#16](https://github.com/phucndq05/taskHub/pull/16) |
 
 ## Tech stack
 
