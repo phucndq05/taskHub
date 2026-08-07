@@ -25,7 +25,24 @@ only; no frontend is included.
 - SQLAlchemy 2.x async configuration with request-scoped `AsyncSession`
 - PostgreSQL 16 models for the TaskHub domain
 - Alembic initial migration for the current schema
-- Ruff, mypy, pytest, Dockerfile, and Docker Compose baseline
+- Ruff, mypy, pytest, Dockerfile, and a complete Docker Compose development stack
+
+## Requirement traceability
+
+| # | Requirement | Pull request |
+|---|---|---|
+| 1 | Auth | [#6](https://github.com/phucndq05/taskHub/pull/6) |
+| 2 | User | [#7](https://github.com/phucndq05/taskHub/pull/7) |
+| 3 | Workspace | [#8](https://github.com/phucndq05/taskHub/pull/8) |
+| 4 | Project | [#9](https://github.com/phucndq05/taskHub/pull/9) |
+| 5 | Task | [#4](https://github.com/phucndq05/taskHub/pull/4) |
+| 6 | Label | [#10](https://github.com/phucndq05/taskHub/pull/10) |
+| 7 | Comment | [#11](https://github.com/phucndq05/taskHub/pull/11) |
+| 8 | Filtering & Pagination | [#5](https://github.com/phucndq05/taskHub/pull/5) |
+| 9 | Redis Caching | [#13](https://github.com/phucndq05/taskHub/pull/13) |
+| 10 | Background assignment email | [#14](https://github.com/phucndq05/taskHub/pull/14) |
+| 11 | RBAC | [#12](https://github.com/phucndq05/taskHub/pull/12) |
+| 12 | Swagger / ReDoc | [#15](https://github.com/phucndq05/taskHub/pull/15) |
 
 ## Tech stack
 
@@ -117,10 +134,12 @@ SMTP is disabled when `SMTP_HOST` is empty. To enable local SMTP delivery, set:
 
 ## Database and migrations
 
-Start PostgreSQL:
+For the complete Docker stack, see [Docker](#docker).
+
+For host-based API development, start the supporting services:
 
 ```zsh
-docker compose up -d db
+docker compose up -d db redis mailpit
 ```
 
 Apply the current schema:
@@ -217,29 +236,57 @@ pytest
 
 ## Docker
 
-Validate the current Compose file:
+Docker Desktop is required.
+
+Create local environment configuration from the safe example:
 
 ```zsh
-docker compose config
+cp .env.example .env
 ```
 
-For now, use Docker Compose only to start PostgreSQL:
+The example JWT secret is for local development only. Replace
+`JWT_SECRET_KEY` in `.env` before sharing a local environment with anyone else.
+
+Start the complete development stack:
 
 ```zsh
-docker compose up -d db
+docker compose up --build
 ```
 
-Then run the API from the host environment:
+Compose starts PostgreSQL 16, Redis 7, Mailpit, a one-shot Alembic migration
+service, and the API. The API waits for the migration service to finish
+successfully before starting.
+
+Open:
+
+- API health: `http://localhost:8000/health`
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- Mailpit UI: `http://localhost:8025`
+
+Inspect service status:
 
 ```zsh
-uvicorn app.main:app --reload
+docker compose ps
 ```
 
-Docker API startup, automatic migration wiring, Redis service wiring, and local
-email service wiring will be added in later focused changes.
+View API logs:
 
-## Current limitations
+```zsh
+docker compose logs -f api
+```
 
-- Docker does not yet run migrations automatically.
+Stop the stack without deleting the PostgreSQL development volume:
+
+```zsh
+docker compose down --remove-orphans
+```
+
+Destructive cleanup, only when you intentionally want to remove local
+development data:
+
+```zsh
+docker compose down -v --remove-orphans
+```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
