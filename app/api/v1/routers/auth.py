@@ -36,7 +36,19 @@ async def register(
         ) from exc
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    description="Use the OAuth2 form username field for the user's email address.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "Email or password is incorrect.",
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "description": "The user account is inactive.",
+        },
+    },
+)
 async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     service: AuthServiceDep,

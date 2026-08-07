@@ -1,7 +1,15 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    HTTPException,
+    Path,
+    Query,
+    Response,
+    status,
+)
 
 from app.api.dependencies import CurrentActiveUserDep, EmailSenderDep, TaskServiceDep
 from app.integrations.email import send_assignment_email_safely
@@ -62,16 +70,45 @@ async def create_task(
         ) from exc
 
 
-@router.get("/projects/{project_id}/tasks", response_model=TaskListResponse)
+@router.get(
+    "/projects/{project_id}/tasks",
+    response_model=TaskListResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "Missing or invalid Bearer access token.",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Project was not found or is hidden from the user.",
+        },
+    },
+)
 async def list_tasks(
-    project_id: UUID,
+    project_id: Annotated[
+        UUID,
+        Path(description="Project whose tasks are listed."),
+    ],
     current_user: CurrentActiveUserDep,
     service: TaskServiceDep,
-    task_status: Annotated[TaskStatus | None, Query(alias="status")] = None,
-    priority: Annotated[TaskPriority | None, Query()] = None,
-    assignee_id: Annotated[UUID | None, Query()] = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    task_status: Annotated[
+        TaskStatus | None,
+        Query(alias="status", description="Filter by task workflow status."),
+    ] = None,
+    priority: Annotated[
+        TaskPriority | None,
+        Query(description="Filter by task priority."),
+    ] = None,
+    assignee_id: Annotated[
+        UUID | None,
+        Query(description="Filter to tasks assigned to this user ID."),
+    ] = None,
+    page: Annotated[
+        int,
+        Query(ge=1, description="Page number, starting at 1."),
+    ] = 1,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=100, description="Maximum tasks per page, from 1 through 100."),
+    ] = 20,
 ) -> TaskListResponse:
     try:
         return await service.list_tasks(
