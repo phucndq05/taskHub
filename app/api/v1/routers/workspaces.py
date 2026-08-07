@@ -1,6 +1,7 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from app.api.dependencies import CurrentActiveUserDep, WorkspaceServiceDep
 from app.schemas.workspace import (
@@ -133,9 +134,21 @@ async def list_members(
     "/{workspace_id}/members",
     response_model=WorkspaceMemberRead,
     status_code=status.HTTP_201_CREATED,
+    description="Add an existing active user to the workspace by email.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Workspace or target user was not found.",
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "Membership already exists or target user is inactive.",
+        },
+    },
 )
 async def add_member(
-    workspace_id: UUID,
+    workspace_id: Annotated[
+        UUID,
+        Path(description="Workspace that receives the member."),
+    ],
     request: WorkspaceMemberAdd,
     current_user: CurrentActiveUserDep,
     service: WorkspaceServiceDep,

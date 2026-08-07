@@ -12,6 +12,47 @@ from app.core.config import get_settings
 from app.db.session import create_database_engine, create_database_session_factory
 from app.integrations.cache import TaskListCache
 
+API_DESCRIPTION = (
+    "TaskHub is a FastAPI task management API for authentication, workspaces, "
+    "projects, tasks, labels, comments, RBAC, task-list caching, and assignment "
+    "email notifications."
+)
+
+OPENAPI_TAGS = [
+    {
+        "name": "health",
+        "description": "Application health check.",
+    },
+    {
+        "name": "auth",
+        "description": "Registration, login, refresh-token rotation, and logout.",
+    },
+    {
+        "name": "users",
+        "description": "Current-user profile and password management.",
+    },
+    {
+        "name": "workspaces",
+        "description": "Workspace CRUD and membership management.",
+    },
+    {
+        "name": "projects",
+        "description": "Workspace project CRUD and archive workflow.",
+    },
+    {
+        "name": "tasks",
+        "description": "Project task CRUD, filtering, assignment, and status updates.",
+    },
+    {
+        "name": "labels",
+        "description": "Project labels and task-label attachments.",
+    },
+    {
+        "name": "comments",
+        "description": "Task comments and comment deletion permissions.",
+    },
+]
+
 
 def create_redis_client(redis_url: str) -> Redis:
     """Create a Redis client without opening a network connection."""
@@ -63,7 +104,9 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
         title="TaskHub API",
+        description=API_DESCRIPTION,
         version="0.1.0",
+        openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )
 
